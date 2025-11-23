@@ -52,6 +52,10 @@
   "alerts": [],
   "activity": [
     {
+      "timestamp": "2025-11-23T14:50:49.850105",
+      "message": "Fire detection system started"
+    },
+    {
       "timestamp": "2025-11-23T12:23:49.149611",
       "message": "Camera 1 - Visual ML stopped"
     },
@@ -190,12 +194,12 @@
     }
   ],
   "stats": {
-    "detections_today": 2,
-    "fire_today": 1,
-    "smoke_today": 1,
+    "detections_today": 0,
+    "fire_today": 0,
+    "smoke_today": 0,
     "avg_response_time": 3.2,
     "personnel_online": 12,
     "active_cameras": 0
   },
-  "last_update": "2025-11-23T12:23:49.149618"
+  "last_update": "2025-11-23T14:50:49.850561"
 }

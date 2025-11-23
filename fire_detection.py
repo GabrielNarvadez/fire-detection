@@ -16,6 +16,13 @@ SAVE_DIR_IMG = "detected_images"
 DATA_FILE = "fire_data.json"
 CAMERA_FRAMES_DIR = "camera_frames"  # New: for live camera feeds
 
+# New: clip saving settings
+SAVE_DIR_CLIP = "detected_clips"  # For short detection clips
+CLIP_DURATION_SEC = 5             # Duration window for saved clips
+
+# Frame buffers for each camera
+FRAME_BUFFERS = {}  # {camera_id: [(timestamp, frame), ...]}
+
 # Detection thresholds
 FIRE_CONFIDENCE_THRESHOLD = 0.70
 SMOKE_CONFIDENCE_THRESHOLD = 0.65
@@ -46,6 +53,7 @@ CAMERAS = {
 
 os.makedirs(SAVE_DIR_IMG, exist_ok=True)
 os.makedirs(CAMERA_FRAMES_DIR, exist_ok=True)
+os.makedirs(SAVE_DIR_CLIP, exist_ok=True)
 
 # Initialize data structure
 fire_data = {
@@ -147,6 +155,57 @@ def update_camera_status(camera_id, status, temperature=None):
         fire_data['stats']['active_cameras'] = active
         
         save_data()
+
+# New: frame buffer utilities
+def update_frame_buffer(camera_id, frame):
+    """Keep a rolling buffer of frames for each camera."""
+    now = time.time()
+    if camera_id not in FRAME_BUFFERS:
+        FRAME_BUFFERS[camera_id] = []
+    buf = FRAME_BUFFERS[camera_id]
+
+    # Store a copy to avoid later modification issues
+    buf.append((now, frame.copy()))
+
+    # Drop frames older than CLIP_DURATION_SEC
+    cutoff = now - CLIP_DURATION_SEC
+    while buf and buf[0][0] < cutoff:
+        buf.pop(0)
+
+def save_detection_clip(camera_id, detection_id):
+    """Save a short mp4 clip from the frame buffer and attach it to the detection."""
+    buf = FRAME_BUFFERS.get(camera_id, [])
+    if not buf:
+        return None
+
+    frames = [f for (_, f) in buf]
+    if not frames:
+        return None
+
+    height, width, _ = frames[0].shape
+
+    # Simple fps estimate
+    fps = len(frames) / CLIP_DURATION_SEC if len(frames) > 1 else 10
+
+    filename = f"camera{camera_id}_det_{detection_id}.mp4"
+    save_path = os.path.join(SAVE_DIR_CLIP, filename)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
+
+    for fr in frames:
+        out.write(fr)
+    out.release()
+
+    # Attach clip path to detection
+    for d in fire_data["detections"]:
+        if d["id"] == detection_id:
+            d["clip_path"] = save_path
+            break
+
+    save_data()
+    print(f"💾 Saved detection clip: {save_path}")
+    return save_path
 
 # Log detection
 def log_detection(camera_id, detection_type, confidence, image_path):
@@ -270,6 +329,11 @@ def process_detection_results(results, camera_id, frame, save_image=True):
             # Log detection
             detection_id = log_detection(camera_id, log_type, confidence, save_path)
             detection_info['detection_id'] = detection_id
+
+            # Save short clip from buffer
+            clip_path = save_detection_clip(camera_id, detection_id)
+            if clip_path:
+                detection_info['clip_path'] = clip_path
             
             print(f"\n🚨 {log_type.upper()} DETECTED! Confidence: {confidence:.1%}")
     
@@ -304,6 +368,9 @@ def detect_from_webcam(camera_id=1):
             ret, frame = cap.read()
             if not ret:
                 break
+
+            # Update frame buffer for clips
+            update_frame_buffer(camera_id, frame)
             
             frame_count += 1
             
@@ -394,6 +461,9 @@ def detect_dual_cameras():
                 break
             
             frame_count += 1
+
+            # Update buffer for camera 1
+            update_frame_buffer(1, frame1)
             
             # Save frames for dashboard every 10 frames
             if frame_count - last_frame_save >= 10:
@@ -420,7 +490,10 @@ def detect_dual_cameras():
             if has_camera2:
                 ret2, frame2 = cap2.read()
                 if ret2:
-                    # Save camera 2 frame
+                    # Update buffer for camera 2
+                    update_frame_buffer(2, frame2)
+
+                    # Save camera 2 frame (note: shares last_frame_save)
                     if frame_count - last_frame_save >= 10:
                         frame2_path = os.path.join(CAMERA_FRAMES_DIR, "camera2_live.jpg")
                         cv2.imwrite(frame2_path, frame2)
