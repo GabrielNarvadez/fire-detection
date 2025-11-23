@@ -14,14 +14,19 @@ torch.cuda.is_available = lambda: False
 MODEL_PATH = "10best.pt"
 SAVE_DIR_IMG = "detected_images"
 DATA_FILE = "fire_data.json"
-CAMERA_FRAMES_DIR = "camera_frames"  # New: for live camera feeds
+CAMERA_FRAMES_DIR = "camera_frames"  # For live camera feeds
 
-# New: clip saving settings
+# Clip settings: 1 second before, 4 seconds after
+CLIP_BEFORE_SEC = 1.0
+CLIP_AFTER_SEC = 4.0
+CLIP_DURATION_SEC = CLIP_BEFORE_SEC + CLIP_AFTER_SEC
+CLIP_BUFFER_SEC = CLIP_DURATION_SEC + 2.0  # extra margin for safety
+
 SAVE_DIR_CLIP = "detected_clips"  # For short detection clips
-CLIP_DURATION_SEC = 5             # Duration window for saved clips
 
-# Frame buffers for each camera
-FRAME_BUFFERS = {}  # {camera_id: [(timestamp, frame), ...]}
+# Frame buffers and pending clips
+FRAME_BUFFERS = {}      # {camera_id: [(timestamp, frame), ...]}
+PENDING_CLIPS = {}      # {camera_id: {"detection_id": int, "trigger_time": float}}
 
 # Detection thresholds
 FIRE_CONFIDENCE_THRESHOLD = 0.70
@@ -156,7 +161,7 @@ def update_camera_status(camera_id, status, temperature=None):
         
         save_data()
 
-# New: frame buffer utilities
+# Frame buffer utilities
 def update_frame_buffer(camera_id, frame):
     """Keep a rolling buffer of frames for each camera."""
     now = time.time()
@@ -164,28 +169,35 @@ def update_frame_buffer(camera_id, frame):
         FRAME_BUFFERS[camera_id] = []
     buf = FRAME_BUFFERS[camera_id]
 
-    # Store a copy to avoid later modification issues
     buf.append((now, frame.copy()))
 
-    # Drop frames older than CLIP_DURATION_SEC
-    cutoff = now - CLIP_DURATION_SEC
+    # Remove old frames outside buffer window
+    cutoff = now - CLIP_BUFFER_SEC
     while buf and buf[0][0] < cutoff:
         buf.pop(0)
 
-def save_detection_clip(camera_id, detection_id):
-    """Save a short mp4 clip from the frame buffer and attach it to the detection."""
+def save_detection_clip(camera_id, detection_id, trigger_time):
+    """Save a clip from 1 second before to 4 seconds after trigger_time."""
     buf = FRAME_BUFFERS.get(camera_id, [])
     if not buf:
         return None
 
-    frames = [f for (_, f) in buf]
-    if not frames:
-        return None
+    start_time = trigger_time - CLIP_BEFORE_SEC
+    end_time = trigger_time + CLIP_AFTER_SEC
 
-    height, width, _ = frames[0].shape
+    selected_frames = [frame for (t, frame) in buf if start_time <= t <= end_time]
+    if not selected_frames:
+        # Fallback: use entire buffer if window is empty
+        selected_frames = [frame for (_, frame) in buf]
+        if not selected_frames:
+            return None
 
-    # Simple fps estimate
-    fps = len(frames) / CLIP_DURATION_SEC if len(frames) > 1 else 10
+    height, width, _ = selected_frames[0].shape
+
+    duration = end_time - start_time
+    if duration <= 0:
+        duration = CLIP_DURATION_SEC
+    fps = len(selected_frames) / duration if len(selected_frames) > 1 else 10
 
     filename = f"camera{camera_id}_det_{detection_id}.mp4"
     save_path = os.path.join(SAVE_DIR_CLIP, filename)
@@ -193,7 +205,7 @@ def save_detection_clip(camera_id, detection_id):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
 
-    for fr in frames:
+    for fr in selected_frames:
         out.write(fr)
     out.release()
 
@@ -204,7 +216,7 @@ def save_detection_clip(camera_id, detection_id):
             break
 
     save_data()
-    print(f"💾 Saved detection clip: {save_path}")
+    print(f"Saved detection clip: {save_path}")
     return save_path
 
 # Log detection
@@ -272,7 +284,7 @@ def create_alert(detection_id, detection_type, confidence, location):
     if len(fire_data['alerts']) > 20:
         fire_data['alerts'] = fire_data['alerts'][:20]
     
-    add_activity(f"🚨 ALERT: {alert['message']}")
+    add_activity(f"ALERT: {alert['message']}")
     save_data()
 
 # Process detection results
@@ -330,14 +342,30 @@ def process_detection_results(results, camera_id, frame, save_image=True):
             detection_id = log_detection(camera_id, log_type, confidence, save_path)
             detection_info['detection_id'] = detection_id
 
-            # Save short clip from buffer
-            clip_path = save_detection_clip(camera_id, detection_id)
-            if clip_path:
-                detection_info['clip_path'] = clip_path
+            # Mark a pending clip so we can include 4 seconds after this moment
+            trigger_time = time.time()
+            PENDING_CLIPS[camera_id] = {
+                "detection_id": detection_id,
+                "trigger_time": trigger_time
+            }
             
-            print(f"\n🚨 {log_type.upper()} DETECTED! Confidence: {confidence:.1%}")
+            print(f"\nDETECTED {log_type.upper()} with confidence {confidence:.1%}")
     
     return detection_info
+
+def handle_pending_clips(camera_id):
+    """Check if we can now save a pending clip for this camera."""
+    pending = PENDING_CLIPS.get(camera_id)
+    if not pending:
+        return
+
+    now = time.time()
+    trigger_time = pending["trigger_time"]
+
+    # Wait until we have 4 seconds after trigger
+    if now >= trigger_time + CLIP_AFTER_SEC:
+        save_detection_clip(camera_id, pending["detection_id"], trigger_time)
+        del PENDING_CLIPS[camera_id]
 
 # Webcam detection mode
 def detect_from_webcam(camera_id=1):
@@ -345,15 +373,14 @@ def detect_from_webcam(camera_id=1):
     cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
-        print("❌ Error: Could not open webcam.")
+        print("Error: Could not open webcam.")
         return
     
     print(f"\n{'='*60}")
-    print(f"🎥 {fire_data['cameras'][camera_id]['name']}")
+    print(f"Camera: {fire_data['cameras'][camera_id]['name']}")
     print(f"{'='*60}")
     print("Press 'q' to quit, 's' to save current frame")
-    print("📺 Camera feed is also streaming to dashboard!")
-    print("   View at: http://localhost:8000")
+    print("Camera feed is also streaming to dashboard at http://localhost:8000")
     print(f"{'='*60}\n")
     
     update_camera_status(camera_id, 'online')
@@ -371,10 +398,11 @@ def detect_from_webcam(camera_id=1):
 
             # Update frame buffer for clips
             update_frame_buffer(camera_id, frame)
+            handle_pending_clips(camera_id)
             
             frame_count += 1
             
-            # Save frame for dashboard every 10 frames (about 2 times per second)
+            # Save frame for dashboard every 10 frames
             if frame_count - last_frame_save >= 10:
                 frame_path = os.path.join(CAMERA_FRAMES_DIR, f"camera{camera_id}_live.jpg")
                 cv2.imwrite(frame_path, frame)
@@ -390,12 +418,12 @@ def detect_from_webcam(camera_id=1):
                 detection_info = process_detection_results(results, camera_id, frame, save_image=should_save)
                 
                 if detection_info.get('detection_id'):
-                    detection_cooldown = 300  # 30 seconds cooldown
+                    detection_cooldown = 300  # cooldown frames
                 
                 if detection_cooldown > 0:
                     detection_cooldown -= 1
                 
-                # Update temperature (simulated for thermal camera)
+                # Update temperature for thermal camera
                 if camera_id == 2:
                     temp = 22 + (detection_info['max_fire_confidence'] * 100)
                     update_camera_status(camera_id, 'online', temperature=temp)
@@ -413,7 +441,7 @@ def detect_from_webcam(camera_id=1):
                 save_name = f"camera{camera_id}_manual_{timestamp}.jpg"
                 save_path = os.path.join(SAVE_DIR_IMG, save_name)
                 cv2.imwrite(save_path, annotated_frame)
-                print(f"💾 Saved: {save_name}")
+                print(f"Saved: {save_name}")
     
     finally:
         update_camera_status(camera_id, 'offline')
@@ -425,14 +453,14 @@ def detect_from_webcam(camera_id=1):
 def detect_dual_cameras():
     """Run detection on two cameras simultaneously"""
     print(f"\n{'='*60}")
-    print("🎥 DUAL CAMERA MODE")
+    print("DUAL CAMERA MODE")
     print(f"{'='*60}")
     
     cap1 = cv2.VideoCapture(0)
     cap2 = cv2.VideoCapture(1)
     
     if not cap1.isOpened():
-        print("❌ Error: Could not open camera 1")
+        print("Error: Could not open camera 1")
         return
     
     update_camera_status(1, 'online')
@@ -442,11 +470,10 @@ def detect_dual_cameras():
     if has_camera2:
         update_camera_status(2, 'online')
     else:
-        print("⚠️  Camera 2 not available, using single camera mode")
+        print("Camera 2 not available, using single camera mode")
     
     print("Press 'q' to quit")
-    print("📺 Camera feeds are streaming to dashboard!")
-    print("   View at: http://localhost:8000")
+    print("Camera feeds are streaming to dashboard at http://localhost:8000")
     print(f"{'='*60}\n")
     
     frame_count = 0
@@ -462,8 +489,9 @@ def detect_dual_cameras():
             
             frame_count += 1
 
-            # Update buffer for camera 1
+            # Update buffer and pending clip for camera 1
             update_frame_buffer(1, frame1)
+            handle_pending_clips(1)
             
             # Save frames for dashboard every 10 frames
             if frame_count - last_frame_save >= 10:
@@ -490,10 +518,11 @@ def detect_dual_cameras():
             if has_camera2:
                 ret2, frame2 = cap2.read()
                 if ret2:
-                    # Update buffer for camera 2
+                    # Update buffer and pending clip for camera 2
                     update_frame_buffer(2, frame2)
+                    handle_pending_clips(2)
 
-                    # Save camera 2 frame (note: shares last_frame_save)
+                    # Save camera 2 frame
                     if frame_count - last_frame_save >= 10:
                         frame2_path = os.path.join(CAMERA_FRAMES_DIR, "camera2_live.jpg")
                         cv2.imwrite(frame2_path, frame2)
@@ -544,9 +573,9 @@ def main():
     
     while True:
         print("\n" + "="*60)
-        print("🔥 FIRE & SMOKE DETECTION SYSTEM")
+        print("FIRE AND SMOKE DETECTION SYSTEM")
         print("="*60)
-        print("1. Dual camera detection (Camera 1 & 2)")
+        print("1. Dual camera detection (Camera 1 and 2)")
         print("2. Single webcam (Camera 1)")
         print("3. View statistics")
         print("4. Exit")
@@ -558,7 +587,7 @@ def main():
         elif choice == "2":
             detect_from_webcam(camera_id=1)
         elif choice == "3":
-            print(f"\n📊 Today's Statistics:")
+            print(f"\nToday's Statistics:")
             print(f"   Fire detections: {fire_data['stats']['fire_today']}")
             print(f"   Smoke detections: {fire_data['stats']['smoke_today']}")
             print(f"   Total detections: {fire_data['stats']['detections_today']}")
@@ -566,10 +595,10 @@ def main():
             print(f"   Personnel online: {fire_data['stats']['personnel_online']}")
         elif choice == "4":
             add_activity('Fire detection system stopped')
-            print("👋 Exiting...")
+            print("Exiting...")
             break
         else:
-            print("❌ Invalid choice.")
+            print("Invalid choice.")
 
 if __name__ == "__main__":
     main()
