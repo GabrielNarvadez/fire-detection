@@ -6,6 +6,65 @@
 
 // Configuration
 define('DATA_FILE', 'fire_data.json');
+define('UPLOAD_DIR', 'uploads');
+define('ANNOTATED_DIR', 'annotated');
+
+// Create directories if they don't exist
+if (!is_dir(UPLOAD_DIR)) mkdir(UPLOAD_DIR, 0777, true);
+if (!is_dir(ANNOTATED_DIR)) mkdir(ANNOTATED_DIR, 0777, true);
+
+// Handle file upload
+if (isset($_GET['upload'])) {
+    header('Content-Type: application/json');
+    
+    if (!isset($_FILES['file'])) {
+        echo json_encode(['success' => false, 'error' => 'No file uploaded']);
+        exit;
+    }
+    
+    $file = $_FILES['file'];
+    $type = $_POST['type'] ?? 'image';
+    
+    // Save uploaded file
+    $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $filename = uniqid() . '.' . $ext;
+    $filepath = UPLOAD_DIR . '/' . $filename;
+    
+    if (!move_uploaded_file($file['tmp_name'], $filepath)) {
+        echo json_encode(['success' => false, 'error' => 'Failed to save file']);
+        exit;
+    }
+    
+    // Call Python script to process
+    $pythonScript = __DIR__ . '/process_upload.py';
+    $command = "python3 $pythonScript " . escapeshellarg($filepath) . " " . escapeshellarg($type);
+    $output = shell_exec($command . " 2>&1");
+    $result = json_decode($output, true);
+    
+    if ($result && $result['success']) {
+        echo json_encode($result);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Detection failed: ' . ($output ?? 'Unknown error')]);
+    }
+    exit;
+}
+
+// Handle firefighter save
+if (isset($_GET['save_firefighters'])) {
+    header('Content-Type: application/json');
+    
+    $input = json_decode(file_get_contents('php://input'), true);
+    
+    if (file_exists(DATA_FILE)) {
+        $data = json_decode(file_get_contents(DATA_FILE), true);
+        $data['firefighters'] = $input['firefighters'] ?? [];
+        file_put_contents(DATA_FILE, json_encode($data, JSON_PRETTY_PRINT));
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Data file not found']);
+    }
+    exit;
+}
 
 // Check if this is an API request
 if (isset($_GET['api'])) {
@@ -260,7 +319,7 @@ if (isset($_GET['api'])) {
         .camera-feed {
             background: #000;
             width: 100%;
-            height: 200px;
+            height: 300px;
             border-radius: 8px;
             margin-bottom: 10px;
             display: flex;
@@ -269,6 +328,7 @@ if (isset($_GET['api'])) {
             border: 2px solid #2d3748;
             color: #666;
             font-size: 14px;
+            overflow: hidden;
         }
 
         .map-panel {
@@ -449,6 +509,60 @@ if (isset($_GET['api'])) {
             color: #ffffff;
             border: 2px solid #ffffff;
         }
+
+        .firefighter-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #e94560;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .firefighter-info {
+            flex: 1;
+        }
+
+        .firefighter-info h4 {
+            font-size: 14px;
+            margin-bottom: 5px;
+            color: #fff;
+        }
+
+        .firefighter-info p {
+            font-size: 12px;
+            color: #888;
+            margin: 2px 0;
+        }
+
+        .firefighter-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 11px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .btn-small:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-danger {
+            background: rgba(233, 69, 96, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: rgba(233, 69, 96, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -461,8 +575,54 @@ if (isset($_GET['api'])) {
             <p><strong>Camera:</strong> <span id="emergencyCamera"></span></p>
             <p><strong>Confidence:</strong> <span id="emergencyConfidence"></span></p>
             <div class="emergency-actions">
-                <button class="btn btn-primary" onclick="dispatchFirefighters()">DISPATCH FIREFIGHTERS</button>
+                <button class="btn btn-primary" onclick="showNotificationSelection()">SELECT FIREFIGHTERS TO NOTIFY</button>
                 <button class="btn btn-secondary" onclick="closeEmergency()">ACKNOWLEDGE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Selection Modal -->
+    <div class="emergency-modal" id="notificationModal">
+        <div class="emergency-content" style="max-width: 700px; max-height: 80vh; overflow-y: auto;">
+            <h2 style="font-size: 32px;">📞 Select Who to Notify</h2>
+            <div style="text-align: left; margin: 20px 0;">
+                <label style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; margin-bottom: 10px; cursor: pointer;">
+                    <input type="checkbox" id="notifyAll" onchange="toggleNotifyAll()" style="width: 20px; height: 20px;">
+                    <strong style="font-size: 18px;">NOTIFY ALL FIREFIGHTERS</strong>
+                </label>
+                <div id="firefighterCheckboxes" style="margin-top: 15px;"></div>
+            </div>
+            <div class="emergency-actions">
+                <button class="btn btn-primary" onclick="sendNotifications()">📱 SEND SMS NOTIFICATIONS</button>
+                <button class="btn btn-secondary" onclick="closeNotificationModal()">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Firefighter Modal -->
+    <div class="emergency-modal" id="firefighterModal">
+        <div class="emergency-content" style="background: linear-gradient(135deg, #5352ed 0%, #4338ca 100%); max-width: 500px;">
+            <h2 style="font-size: 32px;" id="firefighterModalTitle">Add Firefighter</h2>
+            <div style="text-align: left; margin: 20px 0;">
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Name:</label>
+                    <input type="text" id="firefighterName" style="width: 100%; padding: 10px; border-radius: 5px; border: none; font-size: 16px;">
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Phone Number:</label>
+                    <input type="tel" id="firefighterPhone" placeholder="+63-917-123-4567" style="width: 100%; padding: 10px; border-radius: 5px; border: none; font-size: 16px;">
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Station:</label>
+                    <select id="firefighterStation" style="width: 100%; padding: 10px; border-radius: 5px; border: none; font-size: 16px;">
+                        <option value="1">Station 1</option>
+                        <option value="2">Station 2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="emergency-actions">
+                <button class="btn btn-primary" onclick="saveFirefighter()">💾 SAVE</button>
+                <button class="btn btn-secondary" onclick="closeFirefighterModal()">CANCEL</button>
             </div>
         </div>
     </div>
@@ -532,6 +692,39 @@ if (isset($_GET['api'])) {
             </div>
         </div>
 
+        <!-- File Upload and Firefighter Management -->
+        <div class="dashboard-grid">
+            <!-- Upload Section -->
+            <div class="panel" style="grid-column: span 6; display: none;">
+                <div class="panel-header">
+                    <span class="panel-title">📤 Upload for Detection</span>
+                </div>
+                <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+                    <button class="btn btn-primary" onclick="document.getElementById('imageUpload').click()">
+                        📷 Upload Image
+                    </button>
+                    <button class="btn btn-primary" onclick="document.getElementById('videoUpload').click()">
+                        🎥 Upload Video
+                    </button>
+                    <input type="file" id="imageUpload" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
+                    <input type="file" id="videoUpload" accept="video/*" style="display: none;" onchange="handleVideoUpload(event)">
+                </div>
+                <div id="uploadPreview" style="background: #000; min-height: 200px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #666;">
+                    Upload an image or video to detect fire/smoke
+                </div>
+                <div id="uploadResult" style="margin-top: 10px; color: #2ed573;"></div>
+            </div>
+
+            <!-- Firefighter Management -->
+            <div class="panel" style="grid-column: span 12;">
+                <div class="panel-header">
+                    <span class="panel-title">👨‍🚒 Manage Firefighters</span>
+                    <button class="btn btn-secondary" style="padding: 5px 15px; font-size: 12px;" onclick="showAddFirefighter()">+ Add Firefighter</button>
+                </div>
+                <div id="firefighterList" style="max-height: 250px; overflow-y: auto;"></div>
+            </div>
+        </div>
+
         <!-- Cameras -->
         <div class="dashboard-grid">
             <div class="panel camera-panel">
@@ -539,7 +732,14 @@ if (isset($_GET['api'])) {
                     <span class="panel-title">📹 Camera 1 - Visual ML</span>
                     <span id="cam1Status" style="color: #888;">● OFFLINE</span>
                 </div>
-                <div class="camera-feed">Camera feed placeholder</div>
+                <div class="camera-feed">
+                    <img id="camera1Feed" src="camera_frames/camera1_live.jpg" 
+                         style="width: 100%; height: 100%; object-fit: cover;" 
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    <div style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; color: #666;">
+                        No camera feed
+                    </div>
+                </div>
                 <div style="font-size: 12px; color: #888;">Building A - Warehouse</div>
             </div>
 
@@ -548,7 +748,14 @@ if (isset($_GET['api'])) {
                     <span class="panel-title">🌡️ Camera 2 - Thermal</span>
                     <span id="cam2Status" style="color: #888;">● OFFLINE</span>
                 </div>
-                <div class="camera-feed">Camera feed placeholder</div>
+                <div class="camera-feed">
+                    <img id="camera2Feed" src="camera_frames/camera2_live.jpg" 
+                         style="width: 100%; height: 100%; object-fit: cover;" 
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    <div style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; color: #666;">
+                        No camera feed
+                    </div>
+                </div>
                 <div style="font-size: 12px; color: #888;">Building A - Warehouse</div>
             </div>
         </div>
@@ -860,15 +1067,307 @@ if (isset($_GET['api'])) {
             initChart();
             await fetchData();
             
-            // Auto-refresh every 3 seconds
+            // Auto-refresh data every 3 seconds
             setInterval(fetchData, 3000);
+            
+            // Auto-refresh camera feeds every 500ms for smooth video
+            setInterval(refreshCameraFeeds, 500);
             
             console.log('Dashboard initialized');
             console.log('Data refreshes every 3 seconds');
         }
 
+        // Refresh camera feeds
+        function refreshCameraFeeds() {
+            const camera1 = document.getElementById('camera1Feed');
+            const camera2 = document.getElementById('camera2Feed');
+            
+            if (camera1) {
+                camera1.src = 'camera_frames/camera1_live.jpg?' + new Date().getTime();
+            }
+            if (camera2) {
+                camera2.src = 'camera_frames/camera2_live.jpg?' + new Date().getTime();
+            }
+        }
+
+        // ========================================
+        // FILE UPLOAD FUNCTIONS
+        // ========================================
+        
+        async function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('type', 'image');
+
+            const preview = document.getElementById('uploadPreview');
+            const result = document.getElementById('uploadResult');
+            
+            preview.innerHTML = '<div style="color: #fff;">Processing...</div>';
+            result.textContent = '';
+
+            try {
+                const response = await fetch('?upload=1', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    preview.innerHTML = `<img src="${data.annotated_image}" style="max-width: 100%; max-height: 300px; border-radius: 8px;">`;
+                    result.innerHTML = `<strong>✓ Detection Complete!</strong><br>
+                        Fire: ${data.fire_count} | Smoke: ${data.smoke_count} | 
+                        <a href="${data.annotated_image}" download style="color: #2ed573;">Download Annotated Image</a>`;
+                } else {
+                    result.textContent = '❌ ' + (data.error || 'Detection failed');
+                }
+            } catch (error) {
+                result.textContent = '❌ Upload failed: ' + error.message;
+            }
+        }
+
+        async function handleVideoUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('type', 'video');
+
+            const preview = document.getElementById('uploadPreview');
+            const result = document.getElementById('uploadResult');
+            
+            preview.innerHTML = '<div style="color: #fff;">Processing video... This may take a while...</div>';
+            result.textContent = '';
+
+            try {
+                const response = await fetch('?upload=1', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    preview.innerHTML = `<video src="${data.annotated_video}" controls style="max-width: 100%; max-height: 300px; border-radius: 8px;"></video>`;
+                    result.innerHTML = `<strong>✓ Detection Complete!</strong><br>
+                        Fire: ${data.fire_count} | Smoke: ${data.smoke_count} | 
+                        <a href="${data.annotated_video}" download style="color: #2ed573;">Download Annotated Video</a>`;
+                } else {
+                    result.textContent = '❌ ' + (data.error || 'Detection failed');
+                }
+            } catch (error) {
+                result.textContent = '❌ Upload failed: ' + error.message;
+            }
+        }
+
+        // ========================================
+        // FIREFIGHTER MANAGEMENT
+        // ========================================
+
+        let firefighters = [];
+        let editingFirefighterId = null;
+
+        function loadFirefighters() {
+            if (dashboardData && dashboardData.firefighters) {
+                firefighters = dashboardData.firefighters;
+            }
+            renderFirefighters();
+        }
+
+        function renderFirefighters() {
+            const list = document.getElementById('firefighterList');
+            
+            if (firefighters.length === 0) {
+                list.innerHTML = '<div style="padding: 20px; text-align: center; color: #888;">No firefighters added yet</div>';
+                return;
+            }
+
+            list.innerHTML = '';
+            firefighters.forEach((ff, index) => {
+                const card = document.createElement('div');
+                card.className = 'firefighter-card';
+                card.innerHTML = `
+                    <div class="firefighter-info">
+                        <h4>👨‍🚒 ${ff.name}</h4>
+                        <p>📱 ${ff.phone}</p>
+                        <p>🏢 Station ${ff.station}</p>
+                    </div>
+                    <div class="firefighter-actions">
+                        <button class="btn-small" onclick="editFirefighter(${index})">✏️ Edit</button>
+                        <button class="btn-small btn-danger" onclick="deleteFirefighter(${index})">🗑️ Delete</button>
+                    </div>
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        function showAddFirefighter() {
+            editingFirefighterId = null;
+            document.getElementById('firefighterModalTitle').textContent = 'Add Firefighter';
+            document.getElementById('firefighterName').value = '';
+            document.getElementById('firefighterPhone').value = '';
+            document.getElementById('firefighterStation').value = '1';
+            document.getElementById('firefighterModal').classList.add('active');
+        }
+
+        function editFirefighter(index) {
+            editingFirefighterId = index;
+            const ff = firefighters[index];
+            document.getElementById('firefighterModalTitle').textContent = 'Edit Firefighter';
+            document.getElementById('firefighterName').value = ff.name;
+            document.getElementById('firefighterPhone').value = ff.phone;
+            document.getElementById('firefighterStation').value = ff.station;
+            document.getElementById('firefighterModal').classList.add('active');
+        }
+
+        async function saveFirefighter() {
+            const name = document.getElementById('firefighterName').value.trim();
+            const phone = document.getElementById('firefighterPhone').value.trim();
+            const station = document.getElementById('firefighterStation').value;
+
+            if (!name || !phone) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            const firefighter = { name, phone, station };
+
+            if (editingFirefighterId !== null) {
+                firefighters[editingFirefighterId] = firefighter;
+            } else {
+                firefighters.push(firefighter);
+            }
+
+            // Save to server
+            await saveFirefightersToServer();
+            
+            closeFirefighterModal();
+            renderFirefighters();
+        }
+
+        async function deleteFirefighter(index) {
+            if (!confirm('Are you sure you want to delete this firefighter?')) {
+                return;
+            }
+
+            firefighters.splice(index, 1);
+            await saveFirefightersToServer();
+            renderFirefighters();
+        }
+
+        async function saveFirefightersToServer() {
+            try {
+                await fetch('?save_firefighters=1', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ firefighters })
+                });
+            } catch (error) {
+                console.error('Error saving firefighters:', error);
+            }
+        }
+
+        function closeFirefighterModal() {
+            document.getElementById('firefighterModal').classList.remove('active');
+        }
+
+        // ========================================
+        // NOTIFICATION SELECTION
+        // ========================================
+
+        let currentAlert = null;
+
+        function showNotificationSelection() {
+            currentAlert = {
+                location: document.getElementById('emergencyLocation').textContent,
+                camera: document.getElementById('emergencyCamera').textContent,
+                confidence: document.getElementById('emergencyConfidence').textContent
+            };
+
+            closeEmergency();
+            
+            // Build firefighter checkboxes
+            const container = document.getElementById('firefighterCheckboxes');
+            container.innerHTML = '';
+            
+            firefighters.forEach((ff, index) => {
+                const label = document.createElement('label');
+                label.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 8px; cursor: pointer;';
+                label.innerHTML = `
+                    <input type="checkbox" class="ff-notify-checkbox" data-index="${index}" style="width: 18px; height: 18px;">
+                    <div>
+                        <strong>${ff.name}</strong><br>
+                        <small style="color: #aaa;">📱 ${ff.phone} | Station ${ff.station}</small>
+                    </div>
+                `;
+                container.appendChild(label);
+            });
+
+            document.getElementById('notificationModal').classList.add('active');
+        }
+
+        function toggleNotifyAll() {
+            const notifyAll = document.getElementById('notifyAll').checked;
+            document.querySelectorAll('.ff-notify-checkbox').forEach(cb => {
+                cb.checked = notifyAll;
+            });
+        }
+
+        async function sendNotifications() {
+            const selectedFirefighters = [];
+            document.querySelectorAll('.ff-notify-checkbox:checked').forEach(cb => {
+                const index = parseInt(cb.dataset.index);
+                selectedFirefighters.push(firefighters[index]);
+            });
+
+            if (selectedFirefighters.length === 0) {
+                alert('Please select at least one firefighter to notify');
+                return;
+            }
+
+            // Log notification
+            const notificationLog = {
+                timestamp: new Date().toISOString(),
+                alert: currentAlert,
+                firefighters: selectedFirefighters.map(ff => ({
+                    name: ff.name,
+                    phone: ff.phone
+                }))
+            };
+
+            console.log('📱 SMS Notifications:', notificationLog);
+
+            // TODO: Integrate with SMS device here
+            // For now, just show confirmation
+            
+            let message = `📱 SMS SENT TO:\n\n`;
+            selectedFirefighters.forEach(ff => {
+                message += `✓ ${ff.name} (${ff.phone})\n`;
+            });
+            message += `\nMessage: "FIRE ALERT at ${currentAlert.location}. Confidence: ${currentAlert.confidence}. Respond immediately."`;
+
+            alert(message);
+
+            closeNotificationModal();
+        }
+
+        function closeNotificationModal() {
+            document.getElementById('notificationModal').classList.remove('active');
+        }
+
         // Start when page loads
         document.addEventListener('DOMContentLoaded', init);
+        
+        // Load firefighters after data fetch
+        setInterval(() => {
+            if (dashboardData) {
+                loadFirefighters();
+            }
+        }, 3000);
     </script>
 </body>
 </html>

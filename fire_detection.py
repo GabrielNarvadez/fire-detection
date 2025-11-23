@@ -6,10 +6,15 @@ from datetime import datetime, timedelta
 import threading
 import time
 
+# FORCE CPU USAGE (fixes old GPU compatibility issues)
+import torch
+torch.cuda.is_available = lambda: False
+
 # -------- SETTINGS --------
 MODEL_PATH = "10best.pt"
 SAVE_DIR_IMG = "detected_images"
 DATA_FILE = "fire_data.json"
+CAMERA_FRAMES_DIR = "camera_frames"  # New: for live camera feeds
 
 # Detection thresholds
 FIRE_CONFIDENCE_THRESHOLD = 0.70
@@ -24,7 +29,8 @@ CAMERAS = {
         'latitude': 14.6005,
         'longitude': 120.9850,
         'status': 'offline',
-        'temperature': 22.0
+        'temperature': 22.0,
+        'frame_path': 'camera_frames/camera1_live.jpg'
     },
     2: {
         'name': 'Camera 2 - Thermal',
@@ -33,11 +39,13 @@ CAMERAS = {
         'latitude': 14.6010,
         'longitude': 120.9855,
         'status': 'offline',
-        'temperature': 22.5
+        'temperature': 22.5,
+        'frame_path': 'camera_frames/camera2_live.jpg'
     }
 }
 
 os.makedirs(SAVE_DIR_IMG, exist_ok=True)
+os.makedirs(CAMERA_FRAMES_DIR, exist_ok=True)
 
 # Initialize data structure
 fire_data = {
@@ -45,6 +53,7 @@ fire_data = {
     'detections': [],
     'alerts': [],
     'activity': [],
+    'firefighters': [],  # User-managed firefighters
     'personnel': [
         {'name': 'Admin Johnson', 'role': 'System Administrator', 'type': 'admin', 'status': 'online'},
         {'name': 'Admin Chen', 'role': 'Operations Manager', 'type': 'admin', 'status': 'online'},
@@ -73,6 +82,29 @@ fire_data = {
     },
     'last_update': datetime.now().isoformat()
 }
+
+# Load existing data if file exists
+def load_existing_data():
+    """Load existing fire_data from JSON file to preserve firefighters and other data"""
+    global fire_data
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r') as f:
+                existing_data = json.load(f)
+                # Preserve firefighters and other persistent data
+                if 'firefighters' in existing_data:
+                    fire_data['firefighters'] = existing_data['firefighters']
+                # Keep recent detections/alerts/activity
+                if 'detections' in existing_data and len(existing_data['detections']) > 0:
+                    fire_data['detections'] = existing_data['detections']
+                if 'alerts' in existing_data and len(existing_data['alerts']) > 0:
+                    fire_data['alerts'] = existing_data['alerts']
+                if 'activity' in existing_data and len(existing_data['activity']) > 0:
+                    fire_data['activity'] = existing_data['activity']
+        except Exception as e:
+            print(f"Could not load existing data: {e}")
+
+load_existing_data()
 
 # Load model
 print("Loading YOLO model...")
@@ -256,6 +288,8 @@ def detect_from_webcam(camera_id=1):
     print(f"🎥 {fire_data['cameras'][camera_id]['name']}")
     print(f"{'='*60}")
     print("Press 'q' to quit, 's' to save current frame")
+    print("📺 Camera feed is also streaming to dashboard!")
+    print("   View at: http://localhost:8000")
     print(f"{'='*60}\n")
     
     update_camera_status(camera_id, 'online')
@@ -263,6 +297,7 @@ def detect_from_webcam(camera_id=1):
     
     frame_count = 0
     detection_cooldown = 0
+    last_frame_save = 0
     
     try:
         while True:
@@ -271,6 +306,12 @@ def detect_from_webcam(camera_id=1):
                 break
             
             frame_count += 1
+            
+            # Save frame for dashboard every 10 frames (about 2 times per second)
+            if frame_count - last_frame_save >= 10:
+                frame_path = os.path.join(CAMERA_FRAMES_DIR, f"camera{camera_id}_live.jpg")
+                cv2.imwrite(frame_path, frame)
+                last_frame_save = frame_count
             
             # Run detection every 5 frames
             if frame_count % 5 == 0:
@@ -336,11 +377,15 @@ def detect_dual_cameras():
     else:
         print("⚠️  Camera 2 not available, using single camera mode")
     
-    print("Press 'q' to quit\n")
+    print("Press 'q' to quit")
+    print("📺 Camera feeds are streaming to dashboard!")
+    print("   View at: http://localhost:8000")
+    print(f"{'='*60}\n")
     
     frame_count = 0
     detection_cooldown_1 = 0
     detection_cooldown_2 = 0
+    last_frame_save = 0
     
     try:
         while True:
@@ -349,6 +394,12 @@ def detect_dual_cameras():
                 break
             
             frame_count += 1
+            
+            # Save frames for dashboard every 10 frames
+            if frame_count - last_frame_save >= 10:
+                frame1_path = os.path.join(CAMERA_FRAMES_DIR, "camera1_live.jpg")
+                cv2.imwrite(frame1_path, frame1)
+                last_frame_save = frame_count
             
             # Process camera 1
             if frame_count % 5 == 0:
@@ -369,6 +420,11 @@ def detect_dual_cameras():
             if has_camera2:
                 ret2, frame2 = cap2.read()
                 if ret2:
+                    # Save camera 2 frame
+                    if frame_count - last_frame_save >= 10:
+                        frame2_path = os.path.join(CAMERA_FRAMES_DIR, "camera2_live.jpg")
+                        cv2.imwrite(frame2_path, frame2)
+                    
                     if frame_count % 5 == 0:
                         results2 = model.predict(source=frame2, verbose=False)
                         annotated_frame2 = results2[0].plot()
