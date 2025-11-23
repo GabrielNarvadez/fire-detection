@@ -1,2 +1,10 @@
 venv
 /venv
+detected_clips
+/detected_clips
+detected_images
+/detected_images
+annotated
+/annotated
+fire_data.json
+/fire_data.json
