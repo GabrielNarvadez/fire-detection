@@ -177,7 +177,7 @@ def update_frame_buffer(camera_id, frame):
         buf.pop(0)
 
 def save_detection_clip(camera_id, detection_id, trigger_time):
-    """Save a clip from 1 second before to 4 seconds after trigger_time."""
+    """Save a clip from 1 second before to 4 seconds after trigger_time with bounding boxes."""
     buf = FRAME_BUFFERS.get(camera_id, [])
     if not buf:
         return None
@@ -192,6 +192,7 @@ def save_detection_clip(camera_id, detection_id, trigger_time):
         if not selected_frames:
             return None
 
+    # Use size from first frame
     height, width, _ = selected_frames[0].shape
 
     duration = end_time - start_time
@@ -205,8 +206,12 @@ def save_detection_clip(camera_id, detection_id, trigger_time):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
 
+    # Re run YOLO on each frame to draw boxes
     for fr in selected_frames:
-        out.write(fr)
+        results = model.predict(source=fr, verbose=False)
+        annotated = results[0].plot()
+        out.write(annotated)
+
     out.release()
 
     # Attach clip path to detection
@@ -216,8 +221,22 @@ def save_detection_clip(camera_id, detection_id, trigger_time):
             break
 
     save_data()
-    print(f"Saved detection clip: {save_path}")
+    print(f"Saved detection clip with boxes: {save_path}")
     return save_path
+
+def handle_pending_clips(camera_id):
+    """Check if we can now save a pending clip for this camera."""
+    pending = PENDING_CLIPS.get(camera_id)
+    if not pending:
+        return
+
+    now = time.time()
+    trigger_time = pending["trigger_time"]
+
+    # Wait until we have 4 seconds after trigger
+    if now >= trigger_time + CLIP_AFTER_SEC:
+        save_detection_clip(camera_id, pending["detection_id"], trigger_time)
+        del PENDING_CLIPS[camera_id]
 
 # Log detection
 def log_detection(camera_id, detection_type, confidence, image_path):
@@ -352,20 +371,6 @@ def process_detection_results(results, camera_id, frame, save_image=True):
             print(f"\nDETECTED {log_type.upper()} with confidence {confidence:.1%}")
     
     return detection_info
-
-def handle_pending_clips(camera_id):
-    """Check if we can now save a pending clip for this camera."""
-    pending = PENDING_CLIPS.get(camera_id)
-    if not pending:
-        return
-
-    now = time.time()
-    trigger_time = pending["trigger_time"]
-
-    # Wait until we have 4 seconds after trigger
-    if now >= trigger_time + CLIP_AFTER_SEC:
-        save_detection_clip(camera_id, pending["detection_id"], trigger_time)
-        del PENDING_CLIPS[camera_id]
 
 # Webcam detection mode
 def detect_from_webcam(camera_id=1):
