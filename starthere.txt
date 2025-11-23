@@ -1,0 +1,135 @@
+╔════════════════════════════════════════════════════════════════╗
+║                                                                ║
+║     🔥 FIRE DETECTION SYSTEM - SIMPLE VERSION                 ║
+║                                                                ║
+║     JUST 2 FILES YOU NEED!                                    ║
+║                                                                ║
+╚════════════════════════════════════════════════════════════════╝
+
+
+📁 THE ONLY FILES YOU NEED:
+═══════════════════════════════════════════════════════════════
+
+1. fire_detection.py      ← Python script (run FIRST)
+2. dashboard.php          ← Dashboard (run SECOND)
+3. SIMPLE_README.md       ← Instructions
+
+
+🚀 QUICK START (3 Steps):
+═══════════════════════════════════════════════════════════════
+
+Step 1: Install Python packages
+────────────────────────────────
+pip install opencv-python ultralytics --break-system-packages
+
+
+Step 2: Run Python (Terminal 1)
+────────────────────────────────
+python3 fire_detection.py
+
+Choose option 2 for single webcam
+
+
+Step 3: Run Dashboard (Terminal 2)
+───────────────────────────────────
+php -S localhost:8000 dashboard.php
+
+Then open: http://localhost:8000
+
+
+✅ DONE! That's literally all you need!
+═══════════════════════════════════════════════════════════════
+
+
+📖 HOW IT WORKS:
+═══════════════════════════════════════════════════════════════
+
+Python Script               JSON File              Dashboard
+     ↓                         ↓                       ↓
+Runs camera              fire_data.json          Shows data
+Detects fire       ←     Stores all data    →    Auto-refresh
+Saves results             (no database!)          (every 3s)
+
+
+🎯 WHAT YOU GET:
+═══════════════════════════════════════════════════════════════
+
+✓ Real-time fire/smoke detection
+✓ Live dashboard with stats
+✓ Emergency alerts
+✓ Interactive map
+✓ 12 personnel tracking
+✓ Activity log
+✓ Detection history
+✓ Saved images with bounding boxes
+
+
+🗂️ IGNORE THESE FILES (Optional/Advanced):
+═══════════════════════════════════════════════════════════════
+
+The folder also contains advanced versions with MySQL database:
+- fire_detection_system.py  (complex version with database)
+- database_schema.sql        (if you want MySQL instead of JSON)
+- api.php                    (separate API file)
+- fire-detection-dashboard.html (standalone version)
+
+You DON'T need these unless you want database integration!
+
+
+💡 WHY 2 FILES?
+═══════════════════════════════════════════════════════════════
+
+Q: Can I use just PHP or JavaScript?
+A: NO - You NEED Python for YOLO AI detection.
+
+Q: Why not just one file?
+A: Python does AI detection, PHP shows the results.
+   They work together but do different jobs.
+
+Your Setup:
+  Python (fire_detection.py)  = Brain (AI detection)
+  PHP (dashboard.php)         = Face (web display)
+
+
+📊 WHAT GETS TRACKED:
+═══════════════════════════════════════════════════════════════
+
+In fire_data.json (auto-created by Python):
+✓ All fire/smoke detections
+✓ Camera status (online/offline)
+✓ Alerts (critical/warning)
+✓ Activity log
+✓ Personnel status
+✓ Statistics
+
+
+🆘 PROBLEMS?
+═══════════════════════════════════════════════════════════════
+
+Problem: "Module not found"
+Solution: pip install opencv-python ultralytics --break-system-packages
+
+Problem: Dashboard shows "No data available"
+Solution: Make sure Python is running FIRST
+
+Problem: Camera won't open
+Solution: Check camera permissions, try different camera index
+
+Problem: Dashboard won't load
+Solution: Make sure PHP is running on port 8000
+
+
+📞 NEED HELP?
+═══════════════════════════════════════════════════════════════
+
+Read: SIMPLE_README.md (detailed instructions)
+
+1. Start Python first
+2. Check fire_data.json is created
+3. Start PHP second
+4. Open browser to localhost:8000
+
+
+═══════════════════════════════════════════════════════════════
+           READY? LET'S GO! START WITH STEP 1 ABOVE
+═══════════════════════════════════════════════════════════════
