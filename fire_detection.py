@@ -1,165 +1,70 @@
 import cv2
 from ultralytics import YOLO
 import os
-import json
-from datetime import datetime, timedelta
-import threading
+from datetime import datetime
 import time
 
 # FORCE CPU USAGE (fixes old GPU compatibility issues)
 import torch
 torch.cuda.is_available = lambda: False
 
+# Import database module
+from database import (
+    init_database, get_cameras, update_camera_status, log_detection,
+    update_detection_clip, create_alert, add_activity, get_stats
+)
+
 # -------- SETTINGS --------
 MODEL_PATH = "10best.pt"
 SAVE_DIR_IMG = "detected_images"
-DATA_FILE = "fire_data.json"
-CAMERA_FRAMES_DIR = "camera_frames"  # For live camera feeds
+CAMERA_FRAMES_DIR = "camera_frames"
 
 # Clip settings: 1 second before, 4 seconds after
 CLIP_BEFORE_SEC = 1.0
 CLIP_AFTER_SEC = 4.0
 CLIP_DURATION_SEC = CLIP_BEFORE_SEC + CLIP_AFTER_SEC
-CLIP_BUFFER_SEC = CLIP_DURATION_SEC + 2.0  # extra margin for safety
+CLIP_BUFFER_SEC = CLIP_DURATION_SEC + 2.0
 
-SAVE_DIR_CLIP = "detected_clips"  # For short detection clips
+SAVE_DIR_CLIP = "detected_clips"
 
 # Frame buffers and pending clips
-FRAME_BUFFERS = {}      # {camera_id: [(timestamp, frame), ...]}
-PENDING_CLIPS = {}      # {camera_id: {"detection_id": int, "trigger_time": float}}
+FRAME_BUFFERS = {}
+PENDING_CLIPS = {}
 
 # Detection thresholds
 FIRE_CONFIDENCE_THRESHOLD = 0.70
 SMOKE_CONFIDENCE_THRESHOLD = 0.65
 
-# Camera Configuration
-CAMERAS = {
-    1: {
-        'name': 'Camera 1 - Visual ML',
-        'type': 'visual',
-        'location': 'Building A - Warehouse',
-        'latitude': 14.6005,
-        'longitude': 120.9850,
-        'status': 'offline',
-        'temperature': 22.0,
-        'frame_path': 'camera_frames/camera1_live.jpg'
-    },
-    2: {
-        'name': 'Camera 2 - Thermal',
-        'type': 'thermal',
-        'location': 'Building A - Warehouse',
-        'latitude': 14.6010,
-        'longitude': 120.9855,
-        'status': 'offline',
-        'temperature': 22.5,
-        'frame_path': 'camera_frames/camera2_live.jpg'
-    }
-}
-
+# Create directories
 os.makedirs(SAVE_DIR_IMG, exist_ok=True)
 os.makedirs(CAMERA_FRAMES_DIR, exist_ok=True)
 os.makedirs(SAVE_DIR_CLIP, exist_ok=True)
 
-# Initialize data structure
-fire_data = {
-    'cameras': CAMERAS,
-    'detections': [],
-    'alerts': [],
-    'activity': [],
-    'firefighters': [],  # User-managed firefighters
-    'personnel': [
-        {'name': 'Admin Johnson', 'role': 'System Administrator', 'type': 'admin', 'status': 'online'},
-        {'name': 'Admin Chen', 'role': 'Operations Manager', 'type': 'admin', 'status': 'online'},
-        {'name': 'FF Rodriguez', 'role': 'Fire Chief - Station 1', 'type': 'firefighter', 'status': 'online', 'station': 1},
-        {'name': 'FF Martinez', 'role': 'Firefighter - Station 1', 'type': 'firefighter', 'status': 'online', 'station': 1},
-        {'name': 'FF Santos', 'role': 'Firefighter - Station 1', 'type': 'firefighter', 'status': 'online', 'station': 1},
-        {'name': 'FF Reyes', 'role': 'Firefighter - Station 1', 'type': 'firefighter', 'status': 'online', 'station': 1},
-        {'name': 'FF Cruz', 'role': 'Firefighter - Station 1', 'type': 'firefighter', 'status': 'online', 'station': 1},
-        {'name': 'FF Bautista', 'role': 'Firefighter - Station 1', 'type': 'firefighter', 'status': 'online', 'station': 1},
-        {'name': 'FF Garcia', 'role': 'Fire Chief - Station 2', 'type': 'firefighter', 'status': 'online', 'station': 2},
-        {'name': 'FF Lopez', 'role': 'Firefighter - Station 2', 'type': 'firefighter', 'status': 'online', 'station': 2},
-        {'name': 'FF Hernandez', 'role': 'Firefighter - Station 2', 'type': 'firefighter', 'status': 'online', 'station': 2},
-        {'name': 'FF Dela Cruz', 'role': 'Firefighter - Station 2', 'type': 'firefighter', 'status': 'online', 'station': 2},
-    ],
-    'stations': [
-        {'id': 1, 'name': 'Fire Station 1', 'latitude': 14.5950, 'longitude': 120.9800, 'personnel_count': 6},
-        {'id': 2, 'name': 'Fire Station 2', 'latitude': 14.6040, 'longitude': 120.9900, 'personnel_count': 6}
-    ],
-    'stats': {
-        'detections_today': 0,
-        'fire_today': 0,
-        'smoke_today': 0,
-        'avg_response_time': 3.2,
-        'personnel_online': 12,
-        'active_cameras': 0
-    },
-    'last_update': datetime.now().isoformat()
-}
-
-# Load existing data if file exists
-def load_existing_data():
-    """Load existing fire_data from JSON file to preserve firefighters and other data"""
-    global fire_data
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r') as f:
-                existing_data = json.load(f)
-                # Preserve firefighters and other persistent data
-                if 'firefighters' in existing_data:
-                    fire_data['firefighters'] = existing_data['firefighters']
-                # Keep recent detections/alerts/activity
-                if 'detections' in existing_data and len(existing_data['detections']) > 0:
-                    fire_data['detections'] = existing_data['detections']
-                if 'alerts' in existing_data and len(existing_data['alerts']) > 0:
-                    fire_data['alerts'] = existing_data['alerts']
-                if 'activity' in existing_data and len(existing_data['activity']) > 0:
-                    fire_data['activity'] = existing_data['activity']
-        except Exception as e:
-            print(f"Could not load existing data: {e}")
-
-load_existing_data()
+# Initialize database
+print("Initializing database...")
+init_database()
 
 # Load model
 print("Loading YOLO model...")
 model = YOLO(MODEL_PATH)
 print("Model loaded successfully!")
 
-# Save data to JSON file
-def save_data():
-    """Save fire_data to JSON file"""
-    fire_data['last_update'] = datetime.now().isoformat()
-    with open(DATA_FILE, 'w') as f:
-        json.dump(fire_data, f, indent=2, default=str)
+# Cache camera data
+CAMERAS_CACHE = None
 
-# Add activity log
-def add_activity(message):
-    """Add activity to log"""
-    activity = {
-        'timestamp': datetime.now().isoformat(),
-        'message': message
-    }
-    fire_data['activity'].insert(0, activity)
-    
-    # Keep only last 50 activities
-    if len(fire_data['activity']) > 50:
-        fire_data['activity'] = fire_data['activity'][:50]
-    
-    save_data()
-    print(f"[ACTIVITY] {message}")
+def get_camera_info(camera_id):
+    """Get camera info from database with caching"""
+    global CAMERAS_CACHE
+    if CAMERAS_CACHE is None:
+        cameras = get_cameras()
+        CAMERAS_CACHE = {cam['id']: cam for cam in cameras}
+    return CAMERAS_CACHE.get(camera_id)
 
-# Update camera status
-def update_camera_status(camera_id, status, temperature=None):
-    """Update camera status"""
-    if camera_id in fire_data['cameras']:
-        fire_data['cameras'][camera_id]['status'] = status
-        if temperature is not None:
-            fire_data['cameras'][camera_id]['temperature'] = temperature
-        
-        # Update active cameras count
-        active = sum(1 for cam in fire_data['cameras'].values() if cam['status'] == 'online')
-        fire_data['stats']['active_cameras'] = active
-        
-        save_data()
+def refresh_camera_cache():
+    """Refresh the camera cache"""
+    global CAMERAS_CACHE
+    cameras = get_cameras()
+    CAMERAS_CACHE = {cam['id']: cam for cam in cameras}
 
 # Frame buffer utilities
 def update_frame_buffer(camera_id, frame):
@@ -168,10 +73,8 @@ def update_frame_buffer(camera_id, frame):
     if camera_id not in FRAME_BUFFERS:
         FRAME_BUFFERS[camera_id] = []
     buf = FRAME_BUFFERS[camera_id]
-
     buf.append((now, frame.copy()))
-
-    # Remove old frames outside buffer window
+    
     cutoff = now - CLIP_BUFFER_SEC
     while buf and buf[0][0] < cutoff:
         buf.pop(0)
@@ -187,14 +90,11 @@ def save_detection_clip(camera_id, detection_id, trigger_time):
 
     selected_frames = [frame for (t, frame) in buf if start_time <= t <= end_time]
     if not selected_frames:
-        # Fallback: use entire buffer if window is empty
         selected_frames = [frame for (_, frame) in buf]
         if not selected_frames:
             return None
 
-    # Use size from first frame
     height, width, _ = selected_frames[0].shape
-
     duration = end_time - start_time
     if duration <= 0:
         duration = CLIP_DURATION_SEC
@@ -206,7 +106,6 @@ def save_detection_clip(camera_id, detection_id, trigger_time):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
 
-    # Re run YOLO on each frame to draw boxes
     for fr in selected_frames:
         results = model.predict(source=fr, verbose=False)
         annotated = results[0].plot()
@@ -214,13 +113,9 @@ def save_detection_clip(camera_id, detection_id, trigger_time):
 
     out.release()
 
-    # Attach clip path to detection
-    for d in fire_data["detections"]:
-        if d["id"] == detection_id:
-            d["clip_path"] = save_path
-            break
-
-    save_data()
+    # Update detection with clip path in database
+    update_detection_clip(detection_id, save_path)
+    
     print(f"Saved detection clip with boxes: {save_path}")
     return save_path
 
@@ -233,80 +128,10 @@ def handle_pending_clips(camera_id):
     now = time.time()
     trigger_time = pending["trigger_time"]
 
-    # Wait until we have 4 seconds after trigger
     if now >= trigger_time + CLIP_AFTER_SEC:
         save_detection_clip(camera_id, pending["detection_id"], trigger_time)
         del PENDING_CLIPS[camera_id]
 
-# Log detection
-def log_detection(camera_id, detection_type, confidence, image_path):
-    """Log a fire/smoke detection"""
-    detection = {
-        'id': len(fire_data['detections']) + 1,
-        'camera_id': camera_id,
-        'camera_name': fire_data['cameras'][camera_id]['name'],
-        'detection_type': detection_type,
-        'confidence': confidence,
-        'image_path': image_path,
-        'location': fire_data['cameras'][camera_id]['location'],
-        'latitude': fire_data['cameras'][camera_id]['latitude'],
-        'longitude': fire_data['cameras'][camera_id]['longitude'],
-        'status': 'pending',
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    fire_data['detections'].insert(0, detection)
-    
-    # Keep only last 100 detections
-    if len(fire_data['detections']) > 100:
-        fire_data['detections'] = fire_data['detections'][:100]
-    
-    # Update today's stats
-    today = datetime.now().date()
-    fire_data['stats']['detections_today'] = sum(
-        1 for d in fire_data['detections'] 
-        if datetime.fromisoformat(d['timestamp']).date() == today
-    )
-    fire_data['stats']['fire_today'] = sum(
-        1 for d in fire_data['detections'] 
-        if d['detection_type'] == 'fire' and datetime.fromisoformat(d['timestamp']).date() == today
-    )
-    fire_data['stats']['smoke_today'] = sum(
-        1 for d in fire_data['detections'] 
-        if d['detection_type'] == 'smoke' and datetime.fromisoformat(d['timestamp']).date() == today
-    )
-    
-    # Create alert if high confidence
-    if confidence >= 0.85:
-        create_alert(detection['id'], detection_type, confidence, detection['location'])
-    
-    save_data()
-    return detection['id']
-
-# Create alert
-def create_alert(detection_id, detection_type, confidence, location):
-    """Create a critical alert"""
-    alert_level = 'critical' if detection_type == 'fire' else 'warning'
-    
-    alert = {
-        'id': len(fire_data['alerts']) + 1,
-        'detection_id': detection_id,
-        'alert_level': alert_level,
-        'message': f"{detection_type.upper()} detected at {location} - Confidence: {confidence:.1%}",
-        'status': 'active',
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    fire_data['alerts'].insert(0, alert)
-    
-    # Keep only last 20 alerts
-    if len(fire_data['alerts']) > 20:
-        fire_data['alerts'] = fire_data['alerts'][:20]
-    
-    add_activity(f"ALERT: {alert['message']}")
-    save_data()
-
-# Process detection results
 def process_detection_results(results, camera_id, frame, save_image=True):
     """Process YOLO detection results"""
     detection_info = {
@@ -316,7 +141,6 @@ def process_detection_results(results, camera_id, frame, save_image=True):
         'max_smoke_confidence': 0
     }
     
-    # Parse YOLO results
     for result in results:
         boxes = result.boxes
         for box in boxes:
@@ -337,7 +161,6 @@ def process_detection_results(results, camera_id, frame, save_image=True):
                     confidence
                 )
     
-    # Save and log if detection found
     if save_image and (detection_info['has_fire'] or detection_info['has_smoke']):
         if detection_info['max_fire_confidence'] >= detection_info['max_smoke_confidence']:
             log_type = 'fire'
@@ -357,11 +180,31 @@ def process_detection_results(results, camera_id, frame, save_image=True):
             annotated_frame = results[0].plot()
             cv2.imwrite(save_path, annotated_frame)
             
-            # Log detection
-            detection_id = log_detection(camera_id, log_type, confidence, save_path)
+            # Get camera info
+            camera = get_camera_info(camera_id)
+            
+            # Log detection to database
+            detection_id = log_detection(
+                camera_id=camera_id,
+                detection_type=log_type,
+                confidence=confidence,
+                image_path=save_path,
+                location=camera['location'],
+                latitude=camera['latitude'],
+                longitude=camera['longitude'],
+                camera_name=camera['name']
+            )
+            
             detection_info['detection_id'] = detection_id
+            
+            # Create alert if high confidence
+            if confidence >= 0.85:
+                alert_level = 'critical' if log_type == 'fire' else 'warning'
+                message = f"{log_type.upper()} detected at {camera['location']} - Confidence: {confidence:.1%}"
+                create_alert(detection_id, alert_level, message)
+                add_activity(f"ALERT: {message}")
 
-            # Mark a pending clip so we can include 4 seconds after this moment
+            # Mark pending clip
             trigger_time = time.time()
             PENDING_CLIPS[camera_id] = {
                 "detection_id": detection_id,
@@ -372,7 +215,6 @@ def process_detection_results(results, camera_id, frame, save_image=True):
     
     return detection_info
 
-# Webcam detection mode
 def detect_from_webcam(camera_id=1):
     """Run detection on webcam"""
     cap = cv2.VideoCapture(0)
@@ -381,15 +223,17 @@ def detect_from_webcam(camera_id=1):
         print("Error: Could not open webcam.")
         return
     
+    camera = get_camera_info(camera_id)
+    
     print(f"\n{'='*60}")
-    print(f"Camera: {fire_data['cameras'][camera_id]['name']}")
+    print(f"Camera: {camera['name']}")
     print(f"{'='*60}")
     print("Press 'q' to quit, 's' to save current frame")
     print("Camera feed is also streaming to dashboard at http://localhost:8000")
     print(f"{'='*60}\n")
     
     update_camera_status(camera_id, 'online')
-    add_activity(f"{fire_data['cameras'][camera_id]['name']} started")
+    add_activity(f"{camera['name']} started")
     
     frame_count = 0
     detection_cooldown = 0
@@ -401,41 +245,35 @@ def detect_from_webcam(camera_id=1):
             if not ret:
                 break
 
-            # Update frame buffer for clips
             update_frame_buffer(camera_id, frame)
             handle_pending_clips(camera_id)
             
             frame_count += 1
             
-            # Save frame for dashboard every 10 frames
             if frame_count - last_frame_save >= 10:
                 frame_path = os.path.join(CAMERA_FRAMES_DIR, f"camera{camera_id}_live.jpg")
                 cv2.imwrite(frame_path, frame)
                 last_frame_save = frame_count
             
-            # Run detection every 5 frames
             if frame_count % 5 == 0:
                 results = model.predict(source=frame, verbose=False)
                 annotated_frame = results[0].plot()
                 
-                # Process detections
                 should_save = (detection_cooldown <= 0)
                 detection_info = process_detection_results(results, camera_id, frame, save_image=should_save)
                 
                 if detection_info.get('detection_id'):
-                    detection_cooldown = 300  # cooldown frames
+                    detection_cooldown = 300
                 
                 if detection_cooldown > 0:
                     detection_cooldown -= 1
                 
-                # Update temperature for thermal camera
                 if camera_id == 2:
                     temp = 22 + (detection_info['max_fire_confidence'] * 100)
                     update_camera_status(camera_id, 'online', temperature=temp)
             else:
                 annotated_frame = frame
             
-            # Display
             cv2.imshow("Fire & Smoke Detection", annotated_frame)
             
             key = cv2.waitKey(1) & 0xFF
@@ -450,11 +288,10 @@ def detect_from_webcam(camera_id=1):
     
     finally:
         update_camera_status(camera_id, 'offline')
-        add_activity(f"{fire_data['cameras'][camera_id]['name']} stopped")
+        add_activity(f"{camera['name']} stopped")
         cap.release()
         cv2.destroyAllWindows()
 
-# Dual camera mode
 def detect_dual_cameras():
     """Run detection on two cameras simultaneously"""
     print(f"\n{'='*60}")
@@ -467,6 +304,8 @@ def detect_dual_cameras():
     if not cap1.isOpened():
         print("Error: Could not open camera 1")
         return
+    
+    refresh_camera_cache()
     
     update_camera_status(1, 'online')
     add_activity('Dual camera monitoring started')
@@ -494,17 +333,14 @@ def detect_dual_cameras():
             
             frame_count += 1
 
-            # Update buffer and pending clip for camera 1
             update_frame_buffer(1, frame1)
             handle_pending_clips(1)
             
-            # Save frames for dashboard every 10 frames
             if frame_count - last_frame_save >= 10:
                 frame1_path = os.path.join(CAMERA_FRAMES_DIR, "camera1_live.jpg")
                 cv2.imwrite(frame1_path, frame1)
                 last_frame_save = frame_count
             
-            # Process camera 1
             if frame_count % 5 == 0:
                 results1 = model.predict(source=frame1, verbose=False)
                 annotated_frame1 = results1[0].plot()
@@ -519,15 +355,12 @@ def detect_dual_cameras():
             else:
                 annotated_frame1 = frame1
             
-            # Process camera 2
             if has_camera2:
                 ret2, frame2 = cap2.read()
                 if ret2:
-                    # Update buffer and pending clip for camera 2
                     update_frame_buffer(2, frame2)
                     handle_pending_clips(2)
 
-                    # Save camera 2 frame
                     if frame_count - last_frame_save >= 10:
                         frame2_path = os.path.join(CAMERA_FRAMES_DIR, "camera2_live.jpg")
                         cv2.imwrite(frame2_path, frame2)
@@ -544,13 +377,11 @@ def detect_dual_cameras():
                         if detection_cooldown_2 > 0:
                             detection_cooldown_2 -= 1
                         
-                        # Update thermal temperature
                         temp = 22 + (detection_info_2.get('max_fire_confidence', 0) * 100)
                         update_camera_status(2, 'online', temperature=temp)
                     else:
                         annotated_frame2 = frame2
                     
-                    # Display side by side
                     combined = cv2.hconcat([annotated_frame1, annotated_frame2])
                     cv2.imshow("Dual Camera Detection", combined)
                 else:
@@ -570,11 +401,8 @@ def detect_dual_cameras():
         cap1.release()
         cv2.destroyAllWindows()
 
-# Main menu
 def main():
-    # Initialize
     add_activity('Fire detection system started')
-    save_data()
     
     while True:
         print("\n" + "="*60)
@@ -592,12 +420,13 @@ def main():
         elif choice == "2":
             detect_from_webcam(camera_id=1)
         elif choice == "3":
+            stats = get_stats()
             print(f"\nToday's Statistics:")
-            print(f"   Fire detections: {fire_data['stats']['fire_today']}")
-            print(f"   Smoke detections: {fire_data['stats']['smoke_today']}")
-            print(f"   Total detections: {fire_data['stats']['detections_today']}")
-            print(f"   Active cameras: {fire_data['stats']['active_cameras']}")
-            print(f"   Personnel online: {fire_data['stats']['personnel_online']}")
+            print(f"   Fire detections: {stats.get('fire_today', 0)}")
+            print(f"   Smoke detections: {stats.get('smoke_today', 0)}")
+            print(f"   Total detections: {stats.get('detections_today', 0)}")
+            print(f"   Active cameras: {stats.get('active_cameras', 0)}")
+            print(f"   Personnel online: {stats.get('personnel_online', 0)}")
         elif choice == "4":
             add_activity('Fire detection system stopped')
             print("Exiting...")

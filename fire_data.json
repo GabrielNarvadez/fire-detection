@@ -52,6 +52,10 @@
   "alerts": [],
   "activity": [
     {
+      "timestamp": "2025-11-27T17:23:33.375022",
+      "message": "Fire detection system started"
+    },
+    {
       "timestamp": "2025-11-23T14:50:49.850105",
       "message": "Fire detection system started"
     },
@@ -201,5 +205,5 @@
     "personnel_online": 12,
     "active_cameras": 0
   },
-  "last_update": "2025-11-23T14:50:49.850561"
+  "last_update": "2025-11-27T17:23:33.375480"
 }

@@ -4,13 +4,6 @@
 # Computer Vision and AI
 opencv-python>=4.8.0
 ultralytics>=8.0.0
-
-# Database
-mysql-connector-python>=8.0.0
-
 # Optional but recommended
 numpy>=1.24.0
 pillow>=10.0.0
-
-# For production deployment (optional)
-python-dotenv>=1.0.0  # For environment variables
