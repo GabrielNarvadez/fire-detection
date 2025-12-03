@@ -157,6 +157,50 @@ def init_database():
             )
         ''')
         
+        # ============================================
+        # NEW: Firefighter Alert Responses Table
+        # Tracks firefighter responses to alerts
+        # ============================================
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS firefighter_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_id INTEGER,
+                detection_id INTEGER,
+                firefighter_id INTEGER,
+                station_id INTEGER,
+                alert_type TEXT NOT NULL,
+                location TEXT,
+                area TEXT,
+                confidence REAL,
+                status TEXT DEFAULT 'pending',
+                response_type TEXT,
+                received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                responded_at TIMESTAMP,
+                FOREIGN KEY (alert_id) REFERENCES alerts(id),
+                FOREIGN KEY (detection_id) REFERENCES detections(id),
+                FOREIGN KEY (firefighter_id) REFERENCES firefighters(id),
+                FOREIGN KEY (station_id) REFERENCES stations(id)
+            )
+        ''')
+        
+        # ============================================
+        # NEW: Firefighter Stats Table
+        # Tracks individual firefighter performance
+        # ============================================
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS firefighter_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                firefighter_id INTEGER UNIQUE,
+                total_responded INTEGER DEFAULT 0,
+                total_acknowledged INTEGER DEFAULT 0,
+                total_alerts_today INTEGER DEFAULT 0,
+                avg_response_time_seconds REAL DEFAULT 0,
+                last_response_at TIMESTAMP,
+                stats_date DATE,
+                FOREIGN KEY (firefighter_id) REFERENCES firefighters(id)
+            )
+        ''')
+        
         conn.commit()
         
         # Insert default data if tables are empty
@@ -536,6 +580,185 @@ def log_notification(alert_id, firefighter_id, message):
         ''', (alert_id, firefighter_id, message))
         conn.commit()
         return cursor.lastrowid
+
+# ============================================
+# NEW: Firefighter Alert Operations
+# ============================================
+
+def create_firefighter_alert(alert_id, detection_id, firefighter_id, station_id, alert_type, location, area, confidence):
+    """Create a firefighter alert entry"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO firefighter_alerts 
+            (alert_id, detection_id, firefighter_id, station_id, alert_type, location, area, confidence, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        ''', (alert_id, detection_id, firefighter_id, station_id, alert_type, location, area, confidence))
+        conn.commit()
+        return cursor.lastrowid
+
+def get_pending_firefighter_alerts(firefighter_id=None, station_id=None):
+    """Get pending alerts for a firefighter or station"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if firefighter_id:
+            cursor.execute('''
+                SELECT * FROM firefighter_alerts 
+                WHERE firefighter_id = ? AND status = 'pending'
+                ORDER BY received_at DESC
+            ''', (firefighter_id,))
+        elif station_id:
+            cursor.execute('''
+                SELECT * FROM firefighter_alerts 
+                WHERE station_id = ? AND status = 'pending'
+                ORDER BY received_at DESC
+            ''', (station_id,))
+        else:
+            cursor.execute('''
+                SELECT * FROM firefighter_alerts 
+                WHERE status = 'pending'
+                ORDER BY received_at DESC
+            ''')
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_firefighter_alert_history(firefighter_id=None, station_id=None, limit=20):
+    """Get alert history for a firefighter or station"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if firefighter_id:
+            cursor.execute('''
+                SELECT * FROM firefighter_alerts 
+                WHERE firefighter_id = ? AND status != 'pending'
+                ORDER BY received_at DESC LIMIT ?
+            ''', (firefighter_id, limit))
+        elif station_id:
+            cursor.execute('''
+                SELECT * FROM firefighter_alerts 
+                WHERE station_id = ? AND status != 'pending'
+                ORDER BY received_at DESC LIMIT ?
+            ''', (station_id, limit))
+        else:
+            cursor.execute('''
+                SELECT * FROM firefighter_alerts 
+                WHERE status != 'pending'
+                ORDER BY received_at DESC LIMIT ?
+            ''', (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def respond_to_firefighter_alert(alert_id, response_type):
+    """Respond to or acknowledge a firefighter alert"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute('''
+            UPDATE firefighter_alerts 
+            SET status = ?, response_type = ?, responded_at = ?
+            WHERE id = ?
+        ''', (response_type, response_type, now, alert_id))
+        conn.commit()
+        
+        # Update firefighter stats
+        cursor.execute('SELECT firefighter_id, received_at FROM firefighter_alerts WHERE id = ?', (alert_id,))
+        row = cursor.fetchone()
+        if row:
+            _update_firefighter_stats(cursor, row['firefighter_id'], response_type, row['received_at'], now)
+            conn.commit()
+
+def _update_firefighter_stats(cursor, firefighter_id, response_type, received_at, responded_at):
+    """Update firefighter statistics after response"""
+    today = datetime.now().date().isoformat()
+    
+    # Calculate response time in seconds
+    try:
+        received = datetime.fromisoformat(received_at)
+        responded = datetime.fromisoformat(responded_at)
+        response_time = (responded - received).total_seconds()
+    except:
+        response_time = 0
+    
+    # Ensure stats record exists
+    cursor.execute('''
+        INSERT OR IGNORE INTO firefighter_stats (firefighter_id, stats_date)
+        VALUES (?, ?)
+    ''', (firefighter_id, today))
+    
+    # Update stats based on response type
+    if response_type == 'responded':
+        cursor.execute('''
+            UPDATE firefighter_stats SET 
+                total_responded = total_responded + 1,
+                total_alerts_today = total_alerts_today + 1,
+                avg_response_time_seconds = (avg_response_time_seconds * total_responded + ?) / (total_responded + 1),
+                last_response_at = ?
+            WHERE firefighter_id = ?
+        ''', (response_time, responded_at, firefighter_id))
+    else:  # acknowledged
+        cursor.execute('''
+            UPDATE firefighter_stats SET 
+                total_acknowledged = total_acknowledged + 1,
+                total_alerts_today = total_alerts_today + 1,
+                last_response_at = ?
+            WHERE firefighter_id = ?
+        ''', (responded_at, firefighter_id))
+
+def get_firefighter_stats(firefighter_id=None, station_id=None):
+    """Get firefighter statistics"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        today = datetime.now().date().isoformat()
+        
+        if firefighter_id:
+            cursor.execute('''
+                SELECT * FROM firefighter_stats WHERE firefighter_id = ?
+            ''', (firefighter_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        elif station_id:
+            cursor.execute('''
+                SELECT 
+                    SUM(fs.total_responded) as total_responded,
+                    SUM(fs.total_acknowledged) as total_acknowledged,
+                    SUM(fs.total_alerts_today) as total_alerts_today,
+                    AVG(fs.avg_response_time_seconds) as avg_response_time_seconds
+                FROM firefighter_stats fs
+                JOIN firefighters f ON fs.firefighter_id = f.id
+                WHERE f.station = ?
+            ''', (station_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        
+        # Return default stats
+        return {
+            'total_responded': 0,
+            'total_acknowledged': 0,
+            'total_alerts_today': 0,
+            'avg_response_time_seconds': 0
+        }
+
+def broadcast_alert_to_station(station_id, alert_id, detection_id, alert_type, location, area, confidence):
+    """Broadcast an alert to all firefighters in a station"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # Get all firefighters in the station
+        cursor.execute('''
+            SELECT id FROM firefighters WHERE station = ? AND status = 'online'
+        ''', (station_id,))
+        firefighters = cursor.fetchall()
+        
+        alert_ids = []
+        for ff in firefighters:
+            cursor.execute('''
+                INSERT INTO firefighter_alerts 
+                (alert_id, detection_id, firefighter_id, station_id, alert_type, location, area, confidence, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+            ''', (alert_id, detection_id, ff['id'], station_id, alert_type, location, area, confidence))
+            alert_ids.append(cursor.lastrowid)
+        
+        conn.commit()
+        return alert_ids
 
 # ============================================
 # Export for Dashboard

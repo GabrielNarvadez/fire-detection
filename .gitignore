@@ -8,3 +8,11 @@ annotated
 /annotated
 fire_data.json
 /fire_data.json
+__pycache__
+/__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+*.db
