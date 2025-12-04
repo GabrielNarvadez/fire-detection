@@ -16,3 +16,5 @@ __pycache__
 *.sqlite3
 *.log
 *.db
+fire_detection.db
+/fire_detection.db
