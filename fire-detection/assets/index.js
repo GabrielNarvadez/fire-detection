@@ -163,6 +163,16 @@
             }
         }
 
+        // Frontend-only helper for detections or alerts without an ID:
+        // remove the alert card from the DOM when Accept/Decline is clicked.
+        function dismissInlineAlert(buttonEl) {
+            if (!buttonEl) return;
+            const card = buttonEl.closest('.alert-item');
+            if (card && card.parentNode) {
+                card.parentNode.removeChild(card);
+            }
+        }
+
         function updateAlerts(alerts, detections) {
             const alertsList = document.getElementById('alertsList');
 
@@ -244,37 +254,27 @@
                         ? (item.rawMessage || `${item.type === 'fire' ? '🔥 Fire alert' : '💨 Smoke alert'} at ${item.location}`)
                         : `${item.type === 'fire' ? '🔥 Fire detection' : '💨 Smoke detection'} at ${item.location}`;
 
-                const adminStatusLabel = item.source === 'alert'
-                    ? (item.admin_status === 'accepted'
-                        ? 'Accepted'
-                        : item.admin_status === 'declined'
-                            ? 'Declined'
-                            : 'Pending review')
-                    : '';
-
                 const showAdminActions =
                     item.source === 'alert' && item.id && (!item.admin_status || item.admin_status === 'pending');
 
-                const statusHtml = item.source === 'alert'
-                    ? `<div class="alert-status">${adminStatusLabel}</div>`
-                    : '';
-
-                const actionsHtml = showAdminActions
-                    ? `<div class="alert-actions-row">
+                const actionsSection = showAdminActions
+                    ? `<div class="alert-actions-inline">
                             <button class="btn btn-small btn-accept" onclick="handleAdminAlertAction(${item.id}, 'accept')">Accept</button>
                             <button class="btn btn-small btn-decline" onclick="handleAdminAlertAction(${item.id}, 'decline')">Decline</button>
                        </div>`
-                    : '';
+                    : `<div class="alert-actions-inline">
+                            <button class="btn btn-small btn-accept" onclick="dismissInlineAlert(this)">Accept</button>
+                            <button class="btn btn-small btn-decline" onclick="dismissInlineAlert(this)">Decline</button>
+                       </div>`;
 
                 const div = document.createElement('div');
                 div.className = `alert-item ${alertClass}`;
                 div.innerHTML = `
-                    <div class="alert-header-row">
+                    <div class="alert-main">
                         <div class="alert-time">${item.time.toLocaleTimeString()}</div>
-                        ${statusHtml}
+                        <div class="alert-message">${messageText}</div>
                     </div>
-                    <div class="alert-message">${messageText}</div>
-                    ${actionsHtml}
+                    ${actionsSection}
                 `;
                 alertsList.appendChild(div);
             });
