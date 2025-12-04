@@ -11,7 +11,7 @@ try {
     while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
         $activities[] = $row;
     }
-
+// Return the activities as JSON
     echo json_encode($activities);
 } catch (Exception $e) {
     echo json_encode(['error' => $e->getMessage()]);
