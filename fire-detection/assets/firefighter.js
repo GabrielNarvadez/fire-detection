@@ -49,7 +49,10 @@
 					const latest = alerts[0];
 					showAlert(mapBackendAlertToUi(latest));
 				} else {
-					clearAlert();
+					// Only clear when there is no demo/test alert currently being shown
+					if (!currentAlert || !currentAlert.demo) {
+						clearAlert();
+					}
 				}
 
 				if (Array.isArray(detections)) {
@@ -225,7 +228,9 @@
         }
 
 		function simulateAlert() {
-			showAlert(sampleAlerts[Math.floor(Math.random() * sampleAlerts.length)]);
+			const sample = sampleAlerts[Math.floor(Math.random() * sampleAlerts.length)];
+			// Mark as demo so backend polling does not immediately clear it
+			showAlert({ ...sample, demo: true });
 		}
 
 		renderHistory();

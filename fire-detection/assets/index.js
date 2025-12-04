@@ -137,7 +137,17 @@
         }
 
         // Admin-only helper: update alert status to accepted/declined
-        async function handleAdminAlertAction(alertId, action) {
+        function markAlertButtonsCompleted(buttonEl) {
+            if (!buttonEl) return;
+            const card = buttonEl.closest('.alert-item');
+            if (!card) return;
+            const buttons = card.querySelectorAll('.btn-accept, .btn-decline');
+            buttons.forEach(btn => {
+                btn.disabled = true;
+            });
+        }
+
+        async function handleAdminAlertAction(alertId, action, buttonEl) {
             if (!alertId) return;
             const adminStatus = action === 'accept' ? 'accepted' : 'declined';
 
@@ -155,6 +165,9 @@
                     return;
                 }
 
+                // Visually mark buttons as completed (gray/disabled) on success
+                markAlertButtonsCompleted(buttonEl);
+
                 // Refresh dashboard so Active Alerts and stats stay in sync
                 fetchData();
             } catch (error) {
@@ -164,13 +177,9 @@
         }
 
         // Frontend-only helper for detections or alerts without an ID:
-        // remove the alert card from the DOM when Accept/Decline is clicked.
+        // visually mark the buttons as completed (gray/disabled) when Accept/Decline is clicked.
         function dismissInlineAlert(buttonEl) {
-            if (!buttonEl) return;
-            const card = buttonEl.closest('.alert-item');
-            if (card && card.parentNode) {
-                card.parentNode.removeChild(card);
-            }
+            markAlertButtonsCompleted(buttonEl);
         }
 
         function updateAlerts(alerts, detections) {
@@ -259,8 +268,8 @@
 
                 const actionsSection = showAdminActions
                     ? `<div class="alert-actions-inline">
-                            <button class="btn btn-small btn-accept" onclick="handleAdminAlertAction(${item.id}, 'accept')">Accept</button>
-                            <button class="btn btn-small btn-decline" onclick="handleAdminAlertAction(${item.id}, 'decline')">Decline</button>
+                            <button class="btn btn-small btn-accept" onclick="handleAdminAlertAction(${item.id}, 'accept', this)">Accept</button>
+                            <button class="btn btn-small btn-decline" onclick="handleAdminAlertAction(${item.id}, 'decline', this)">Decline</button>
                        </div>`
                     : `<div class="alert-actions-inline">
                             <button class="btn btn-small btn-accept" onclick="dismissInlineAlert(this)">Accept</button>

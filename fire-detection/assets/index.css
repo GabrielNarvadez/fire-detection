@@ -625,4 +625,14 @@
             color: #ffffff;
         }
 
-
+        .btn-accept:disabled,
+        .btn-decline:disabled,
+        .btn-completed {
+            background: rgba(255, 255, 255, 0.12) !important;
+            color: #999 !important;
+            border-color: #555 !important;
+            cursor: default;
+            opacity: 0.7;
+            box-shadow: none;
+            transform: none;
+        }

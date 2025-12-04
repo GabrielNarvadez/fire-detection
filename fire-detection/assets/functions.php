@@ -263,6 +263,53 @@ function insertDefaultData($db) {
 // Initialize database
 initDatabase();
 
+// Handle alert status updates from frontend (admin and firefighter views)
+if (isset($_GET['update_alert'])) {
+    header('Content-Type: application/json');
+    $db = getDB();
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $id = isset($input['id']) ? intval($input['id']) : 0;
+    $adminStatus = $input['admin_status'] ?? null;
+    $firefighterStatus = $input['firefighter_status'] ?? null;
+
+    if (!$id) {
+        echo json_encode(['success' => false, 'error' => 'Missing alert ID']);
+        exit;
+    }
+
+    if ($adminStatus === null && $firefighterStatus === null) {
+        echo json_encode(['success' => false, 'error' => 'No status fields provided']);
+        exit;
+    }
+
+    $fields = [];
+    if ($adminStatus !== null) {
+        $fields[] = 'admin_status = :admin_status';
+    }
+    if ($firefighterStatus !== null) {
+        $fields[] = 'firefighter_status = :firefighter_status';
+    }
+
+    $sql = 'UPDATE alerts SET ' . implode(', ', $fields) . ' WHERE id = :id';
+    $stmt = $db->prepare($sql);
+    if ($adminStatus !== null) {
+        $stmt->bindValue(':admin_status', $adminStatus, SQLITE3_TEXT);
+    }
+    if ($firefighterStatus !== null) {
+        $stmt->bindValue(':firefighter_status', $firefighterStatus, SQLITE3_TEXT);
+    }
+    $stmt->bindValue(':id', $id, SQLITE3_INTEGER);
+
+    $result = $stmt->execute();
+    if ($result) {
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Database error: ' . $db->lastErrorMsg()]);
+    }
+    exit;
+}
+
 // =============================================
 // API Handlers
 // =============================================
