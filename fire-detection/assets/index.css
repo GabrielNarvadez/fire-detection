@@ -573,7 +573,7 @@
             color: #666;
         }
 
-        /* Alert header/status and admin action buttons (Accept/Decline) */
+        /* Alert status header/status and admin action buttons (Accept/Decline) */
         .alert-header-row {
             display: flex;
             justify-content: space-between;
