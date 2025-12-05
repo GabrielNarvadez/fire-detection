@@ -618,21 +618,27 @@
         .btn-accept {
             background: linear-gradient(135deg, #2ed573 0%, #1db954 100%);
             color: #ffffff;
+            border: 2px solid #2ed573;
+        }
+
+        .btn-accept:disabled {
+            background: #cccccc;
+            border-color: #cccccc;
+            color: #666666;
+            cursor: not-allowed;
         }
 
         .btn-decline {
             background: linear-gradient(135deg, #e94560 0%, #d63447 100%);
             color: #ffffff;
+            border: 2px solid #e94560;
         }
 
-        .btn-accept:disabled,
-        .btn-decline:disabled,
-        .btn-completed {
-            background: rgba(255, 255, 255, 0.12) !important;
-            color: #999 !important;
-            border-color: #555 !important;
-            cursor: default;
-            opacity: 0.7;
-            box-shadow: none;
-            transform: none;
+        .btn-decline:disabled {
+            background: #cccccc;
+            border-color: #cccccc;
+            color: #666666;
+            cursor: not-allowed;
         }
+
+

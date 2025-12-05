@@ -49,6 +49,177 @@ function formatTimestamp($timestamp) {
     }
 }
 
+function recordNotification($db, $alertId, $decision = 'accepted') {
+    $check = $db->prepare('SELECT id FROM notifications WHERE alert_id = :alert_id AND decision = :decision ORDER BY id DESC LIMIT 1');
+    if ($check) {
+        $check->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $check->bindValue(':decision', $decision, SQLITE3_TEXT);
+        $existing = $check->execute();
+        if ($existing && ($row = $existing->fetchArray(SQLITE3_ASSOC))) {
+            return (int)$row['id'];
+        }
+    }
+
+    $stmt = $db->prepare('INSERT INTO notifications (alert_id, type, status, decision) VALUES (:alert_id, :type, :status, :decision)');
+    if ($stmt) {
+        $stmt->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $stmt->bindValue(':type', 'firefighter', SQLITE3_TEXT);
+        $stmt->bindValue(':status', 'sent', SQLITE3_TEXT);
+        $stmt->bindValue(':decision', $decision, SQLITE3_TEXT);
+        $stmt->execute();
+        return (int)$db->lastInsertRowID();
+    }
+
+    return null;
+}
+
+function deleteNotificationsForAlert($db, $alertId) {
+    $stmt = $db->prepare('DELETE FROM notifications WHERE alert_id = :alert_id');
+    if ($stmt) {
+        $stmt->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $stmt->execute();
+    }
+}
+
+function ensureFirefighterAlertRow($db, $alertId, $status = 'pending') {
+    $stmt = $db->prepare('SELECT id FROM firefighter_alerts WHERE alert_id = :alert_id LIMIT 1');
+    if ($stmt) {
+        $stmt->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $result = $stmt->execute();
+        if ($result && ($row = $result->fetchArray(SQLITE3_ASSOC))) {
+            return (int)$row['id'];
+        }
+    }
+
+    $insert = $db->prepare('INSERT INTO firefighter_alerts (alert_id, firefighter_status) VALUES (:alert_id, :status)');
+    if ($insert) {
+        $insert->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $insert->bindValue(':status', $status, SQLITE3_TEXT);
+        $insert->execute();
+        return (int)$db->lastInsertRowID();
+    }
+
+    return null;
+}
+
+function updateFirefighterAlertRow($db, $alertId, $newStatus) {
+    $stmt = $db->prepare('SELECT firefighter_status, responded_at, acknowledged_at FROM firefighter_alerts WHERE alert_id = :alert_id LIMIT 1');
+    $current = null;
+    if ($stmt) {
+        $stmt->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $result = $stmt->execute();
+        if ($result) {
+            $current = $result->fetchArray(SQLITE3_ASSOC) ?: null;
+        }
+    }
+
+    if (!$current) {
+        ensureFirefighterAlertRow($db, $alertId, $newStatus);
+        $current = [
+            'firefighter_status' => 'pending',
+            'responded_at' => null,
+            'acknowledged_at' => null
+        ];
+    }
+
+    $fields = [];
+    $respondedJustSet = false;
+    $ackJustSet = false;
+
+    if ($current['firefighter_status'] !== $newStatus) {
+        $fields[] = 'firefighter_status = :status';
+    }
+
+    if ($newStatus === 'responding' && empty($current['responded_at'])) {
+        $fields[] = 'responded_at = CURRENT_TIMESTAMP';
+        $respondedJustSet = true;
+    }
+
+    if ($newStatus === 'acknowledged' && empty($current['acknowledged_at'])) {
+        $fields[] = 'acknowledged_at = CURRENT_TIMESTAMP';
+        $ackJustSet = true;
+    }
+
+    if (empty($fields)) {
+        return ['respondedJustSet' => $respondedJustSet, 'ackJustSet' => $ackJustSet];
+    }
+
+    $sql = 'UPDATE firefighter_alerts SET ' . implode(', ', $fields) . ' WHERE alert_id = :alert_id';
+    $update = $db->prepare($sql);
+    if ($update) {
+        $update->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        if (strpos($sql, ':status') !== false) {
+            $update->bindValue(':status', $newStatus, SQLITE3_TEXT);
+        }
+        $update->execute();
+    }
+
+    return ['respondedJustSet' => $respondedJustSet, 'ackJustSet' => $ackJustSet];
+}
+
+function updateFirefighterStats($db, $status, $alertId, array $transitions = []) {
+    if (!in_array($status, ['responding', 'acknowledged'], true)) {
+        return;
+    }
+
+    if ($status === 'responding' && empty($transitions['respondedJustSet'])) {
+        return;
+    }
+
+    if ($status === 'acknowledged' && empty($transitions['ackJustSet'])) {
+        return;
+    }
+
+    $today = date('Y-m-d');
+    $db->exec("INSERT OR IGNORE INTO firefighter_stats (date, responded_count, acknowledged_count, avg_response_time) VALUES ('$today', 0, 0, 0)");
+
+    $stats = $db->querySingle("SELECT responded_count, acknowledged_count, avg_response_time FROM firefighter_stats WHERE date='$today'", true);
+    if (!$stats) {
+        return;
+    }
+
+    if ($status === 'responding') {
+        $sentAt = null;
+        $stmt = $db->prepare('SELECT sent_at FROM notifications WHERE alert_id = :alert_id ORDER BY id DESC LIMIT 1');
+        if ($stmt) {
+            $stmt->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+            $result = $stmt->execute();
+            if ($result && ($row = $result->fetchArray(SQLITE3_ASSOC))) {
+                $sentAt = $row['sent_at'] ?? null;
+            }
+        }
+
+        $diffMinutes = 0;
+        if ($sentAt) {
+            $diff = (strtotime('now') - strtotime($sentAt));
+            $diffMinutes = max(0, $diff / 60);
+        }
+
+        $responded = (int)$stats['responded_count'];
+        $avg = isset($stats['avg_response_time']) ? (float)$stats['avg_response_time'] : 0.0;
+        $newResponded = $responded + 1;
+        $newAvg = $newResponded > 0 ? (($avg * $responded) + $diffMinutes) / $newResponded : $diffMinutes;
+
+        $update = $db->prepare('UPDATE firefighter_stats SET responded_count = :responded, avg_response_time = :avg WHERE date = :date');
+        if ($update) {
+            $update->bindValue(':responded', $newResponded, SQLITE3_INTEGER);
+            $update->bindValue(':avg', $newAvg, SQLITE3_FLOAT);
+            $update->bindValue(':date', $today, SQLITE3_TEXT);
+            $update->execute();
+        }
+    }
+
+    if ($status === 'acknowledged') {
+        $acknowledged = (int)$stats['acknowledged_count'] + 1;
+        $update = $db->prepare('UPDATE firefighter_stats SET acknowledged_count = :ack WHERE date = :date');
+        if ($update) {
+            $update->bindValue(':ack', $acknowledged, SQLITE3_INTEGER);
+            $update->bindValue(':date', $today, SQLITE3_TEXT);
+            $update->execute();
+        }
+    }
+}
+
 
 
 // Debug endpoint to check database
@@ -212,11 +383,46 @@ function initDatabase() {
     // Detection history for charts
     $db->exec('
         CREATE TABLE IF NOT EXISTS detection_history (
+        	id INTEGER PRIMARY KEY AUTOINCREMENT,
+        	interval_start TIMESTAMP NOT NULL,
+        	fire_count INTEGER DEFAULT 0,
+        	smoke_count INTEGER DEFAULT 0,
+        	UNIQUE(interval_start)
+        )
+    ');
+
+    // Firefighter-facing alerts table (for aggregating firefighter history/stats)
+    $db->exec('
+        CREATE TABLE IF NOT EXISTS firefighter_alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            interval_start TIMESTAMP NOT NULL,
-            fire_count INTEGER DEFAULT 0,
-            smoke_count INTEGER DEFAULT 0,
-            UNIQUE(interval_start)
+            alert_id INTEGER NOT NULL,
+            firefighter_status TEXT DEFAULT "pending",
+            responded_at TIMESTAMP,
+            acknowledged_at TIMESTAMP
+        )
+    ');
+
+    // High-level firefighter statistics
+    $db->exec('
+        CREATE TABLE IF NOT EXISTS firefighter_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE NOT NULL,
+            responded_count INTEGER DEFAULT 0,
+            acknowledged_count INTEGER DEFAULT 0,
+            avg_response_time REAL DEFAULT 0,
+            UNIQUE(date)
+        )
+    ');
+
+    // Notifications table for accepted/declined alerts pushed to firefighters
+    $db->exec('
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_id INTEGER NOT NULL,
+            type TEXT NOT NULL DEFAULT "firefighter",
+            status TEXT NOT NULL DEFAULT "pending",
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            decision TEXT NOT NULL DEFAULT "pending"
         )
     ');
     
@@ -303,6 +509,17 @@ if (isset($_GET['update_alert'])) {
 
     $result = $stmt->execute();
     if ($result) {
+        // If the admin made a decision (Accept or Disable), record it in the notifications table
+        if ($adminStatus !== null) {
+            $decision = $adminStatus; // expected values: "accepted" or "declined"
+            $notifStmt = $db->prepare('INSERT INTO notifications (alert_id, type, status, decision) VALUES (:alert_id, :type, :status, :decision)');
+            $notifStmt->bindValue(':alert_id', $id, SQLITE3_INTEGER);
+            $notifStmt->bindValue(':type', 'firefighter', SQLITE3_TEXT);
+            $notifStmt->bindValue(':status', 'pending', SQLITE3_TEXT);
+            $notifStmt->bindValue(':decision', $decision, SQLITE3_TEXT);
+            $notifStmt->execute();
+        }
+
         echo json_encode(['success' => true]);
     } else {
         echo json_encode(['success' => false, 'error' => 'Database error: ' . $db->lastErrorMsg()]);
@@ -526,6 +743,72 @@ if (isset($_GET['personnel'])) {
     exit;
 }
 
+// Handle creating a new alert from a detection (admin inline Accept/Decline)
+if (isset($_GET['alerts']) && $_GET['alerts'] === 'create') {
+    header('Content-Type: application/json');
+    $db = getDB();
+
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $detectionId = isset($input['detection_id']) ? intval($input['detection_id']) : null;
+    $type = isset($input['type']) ? trim($input['type']) : null; // 'fire' | 'smoke'
+    $location = isset($input['location']) ? trim($input['location']) : '';
+    $message = isset($input['message']) ? trim($input['message']) : '';
+    $alertLevel = isset($input['alert_level']) ? trim($input['alert_level']) : 'info';
+    $adminStatus = isset($input['admin_status']) ? trim($input['admin_status']) : 'pending'; // 'accepted' | 'declined' | 'pending'
+
+    if ($message === '' && $type) {
+        $label = ($type === 'smoke') ? 'Smoke' : 'Fire';
+        $message = ($label === 'Fire' ? '🔥 ' : '💨 ') . "$label alert at " . ($location ?: 'Unknown location');
+    }
+
+    if ($message === '') {
+        echo json_encode(['success' => false, 'error' => 'Missing message for alert']);
+        exit;
+    }
+
+    // Insert alert
+    $stmt = $db->prepare('INSERT INTO alerts (detection_id, alert_level, message, status, admin_status, firefighter_status) VALUES (:detection_id, :alert_level, :message, :status, :admin_status, :firefighter_status)');
+    if (!$stmt) {
+        echo json_encode(['success' => false, 'error' => 'Database prepare failed: ' . $db->lastErrorMsg()]);
+        exit;
+    }
+
+    $stmt->bindValue(':detection_id', $detectionId !== null ? $detectionId : null, $detectionId !== null ? SQLITE3_INTEGER : SQLITE3_NULL);
+    $stmt->bindValue(':alert_level', $alertLevel, SQLITE3_TEXT);
+    $stmt->bindValue(':message', $message, SQLITE3_TEXT);
+    $stmt->bindValue(':status', 'active', SQLITE3_TEXT);
+    $stmt->bindValue(':admin_status', $adminStatus, SQLITE3_TEXT);
+    $stmt->bindValue(':firefighter_status', 'pending', SQLITE3_TEXT);
+
+    $result = $stmt->execute();
+    if (!$result) {
+        echo json_encode(['success' => false, 'error' => 'Insert failed: ' . $db->lastErrorMsg()]);
+        exit;
+    }
+
+    $alertId = (int)$db->lastInsertRowID();
+
+    // Ensure firefighter aggregation row exists
+    ensureFirefighterAlertRow($db, $alertId, 'pending');
+
+    // Record notification if admin already decided
+    if (in_array($adminStatus, ['accepted', 'declined'], true)) {
+        recordNotification($db, $alertId, $adminStatus);
+
+        // Log to activity feed
+        $label = ($adminStatus === 'accepted') ? 'alert_accepted' : 'alert_declined';
+        $logMessage = sprintf('[%s] Alert #%d %s by admin', $label, $alertId, $adminStatus);
+        $logStmt = $db->prepare('INSERT INTO activity (message) VALUES (:message)');
+        if ($logStmt) {
+            $logStmt->bindValue(':message', $logMessage, SQLITE3_TEXT);
+            $logStmt->execute();
+        }
+    }
+
+    echo json_encode(['success' => true, 'id' => $alertId]);
+    exit;
+}
+
 // Handle alert status update (admin accept/decline, firefighter acknowledge/respond)
 if (isset($_GET['update_alert'])) {
     header('Content-Type: application/json');
@@ -650,17 +933,14 @@ if (isset($_GET['api'])) {
         $stations[] = $row;
     }
     
-    // Get stats with computed values
+    // Get stats with computed values from detections table
     $today = date('Y-m-d');
-    $stats = $db->querySingle("SELECT * FROM stats WHERE date='$today'", true);
-    if (!$stats) {
-        $stats = [
-            'detections_today' => 0,
-            'fire_today' => 0,
-            'smoke_today' => 0,
-            'avg_response_time' => 3.2
-        ];
-    }
+    $stats = [
+        'detections_today' => (int)$db->querySingle("SELECT COUNT(*) FROM detections WHERE date(timestamp) = '$today'"),
+        'fire_today' => (int)$db->querySingle("SELECT COUNT(*) FROM detections WHERE date(timestamp) = '$today' AND detection_type = 'fire'"),
+        'smoke_today' => (int)$db->querySingle("SELECT COUNT(*) FROM detections WHERE date(timestamp) = '$today' AND detection_type = 'smoke'"),
+        'avg_response_time' => 3.2  // Default value, can be updated from firefighter_stats if needed
+    ];
     
     // Add real-time computed stats
     $stats['active_cameras'] = $db->querySingle("SELECT COUNT(*) FROM cameras WHERE status='online'");

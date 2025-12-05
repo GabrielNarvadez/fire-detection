@@ -127,24 +127,39 @@
             // Update chart
             updateChart(data.detection_history || []);
 
-            // Check for critical alerts
+            // Check for critical alerts (only pending admin decisions; avoid repeat popups per alert)
             if (data.alerts && data.alerts.length > 0) {
-                const criticalAlert = data.alerts.find(a => a.alert_level === 'critical' && a.status === 'active');
-                if (criticalAlert && !emergencyActive) {
+                if (!window._lastShownEmergencyAlertId) window._lastShownEmergencyAlertId = null;
+                const criticalAlert = data.alerts.find(a => a.alert_level === 'critical' && a.status === 'active' && (!a.admin_status || a.admin_status === 'pending'));
+                if (criticalAlert && !emergencyActive && window._lastShownEmergencyAlertId !== criticalAlert.id) {
+                    window._lastShownEmergencyAlertId = criticalAlert.id;
                     showEmergency(criticalAlert);
                 }
             }
         }
 
         // Admin-only helper: update alert status to accepted/declined
-        function markAlertButtonsCompleted(buttonEl) {
+        function markAlertButtonsCompleted(buttonEl, label) {
             if (!buttonEl) return;
             const card = buttonEl.closest('.alert-item');
             if (!card) return;
-            const buttons = card.querySelectorAll('.btn-accept, .btn-decline');
-            buttons.forEach(btn => {
-                btn.disabled = true;
-            });
+
+            const acceptBtn = card.querySelector('.btn-accept');
+            const declineBtn = card.querySelector('.btn-decline');
+
+            if (acceptBtn) {
+                acceptBtn.disabled = true;
+                if (label === 'Accepted') {
+                    acceptBtn.textContent = 'Accepted';
+                }
+            }
+
+            if (declineBtn) {
+                declineBtn.disabled = true;
+                if (label === 'Disabled') {
+                    declineBtn.textContent = 'Disabled';
+                }
+            }
         }
 
         async function handleAdminAlertAction(alertId, action, buttonEl) {
@@ -166,7 +181,17 @@
                 }
 
                 // Visually mark buttons as completed (gray/disabled) on success
-                markAlertButtonsCompleted(buttonEl);
+                markAlertButtonsCompleted(buttonEl, action === 'accept' ? 'Accepted' : 'Declined');
+
+                // If accepted, show emergency modal for firefighter notification
+                if (action === 'accept') {
+                    // Get alert details for the modal
+                    const alerts = dashboardData?.alerts || [];
+                    const alert = alerts.find(a => a.id === alertId);
+                    if (alert) {
+                        showEmergency(alert);
+                    }
+                }
 
                 // Refresh dashboard so Active Alerts and stats stay in sync
                 fetchData();
@@ -176,10 +201,59 @@
             }
         }
 
-        // Frontend-only helper for detections or alerts without an ID:
-        // visually mark the buttons as completed (gray/disabled) when Accept/Decline is clicked.
-        function dismissInlineAlert(buttonEl) {
-            markAlertButtonsCompleted(buttonEl);
+        function wireAlertActionButtons(cardEl, item) {
+            const acceptBtn = cardEl.querySelector('.alert-actions-inline .btn-accept');
+            const declineBtn = cardEl.querySelector('.alert-actions-inline .btn-decline');
+            if (!acceptBtn || !declineBtn) {
+                return;
+            }
+
+            if (item.source === 'alert' && item.id) {
+                if (!acceptBtn.disabled) acceptBtn.addEventListener('click', () => handleAdminAlertAction(item.id, 'accept', acceptBtn));
+                if (!declineBtn.disabled) declineBtn.addEventListener('click', () => handleAdminAlertAction(item.id, 'decline', declineBtn));
+            } else if (item.source === 'detection') {
+                acceptBtn.addEventListener('click', () => handleDetectionAlertAction(item, 'accept', acceptBtn));
+                declineBtn.addEventListener('click', () => handleDetectionAlertAction(item, 'decline', declineBtn));
+            } else {
+                acceptBtn.disabled = true;
+                declineBtn.disabled = true;
+            }
+        }
+
+        async function handleDetectionAlertAction(item, action, buttonEl) {
+            const adminStatus = action === 'accept' ? 'accepted' : 'declined';
+            try {
+                const payload = {
+                    detection_id: item.detectionId || null,
+                    type: item.type,
+                    location: item.location,
+                    message: item.rawMessage || `${item.type === 'fire' ? '🔥 Fire' : '💨 Smoke'} detection at ${item.location}`,
+                    alert_level: item.level || (item.type === 'fire' ? 'critical' : 'info'),
+                    admin_status: adminStatus
+                };
+
+                const response = await fetch('assets/functions.php?alerts=create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!result.success) {
+                    throw new Error(result.error || 'Unknown error');
+                }
+
+                markAlertButtonsCompleted(buttonEl, action === 'accept' ? 'Accepted' : 'Disabled');
+
+                // If accepted, show emergency modal
+                if (action === 'accept') {
+                    showEmergency(item);
+                }
+
+                fetchData();
+            } catch (error) {
+                console.error('Error handling inline alert action', error);
+                alert(`Failed to ${action} alert: ${error.message}`);
+            }
         }
 
         function updateAlerts(alerts, detections) {
@@ -187,7 +261,7 @@
 
             const items = [];
 
-            // Prefer explicit alerts from the alerts table if present
+            // Always include explicit alerts from the alerts table if present
             if (Array.isArray(alerts)) {
                 alerts.forEach(row => {
                     const message = row.message || '';
@@ -214,17 +288,21 @@
                 });
             }
 
-            // If there are no explicit alerts, fall back to recent detections (real-time from cameras)
-            if (items.length === 0 && Array.isArray(detections)) {
+            // Always include recent detections (real-time from cameras)
+            if (Array.isArray(detections)) {
                 detections.slice(0, 5).forEach(row => {
                     const time = row.timestamp ? new Date(row.timestamp) : new Date();
+                    const detectionType = row.detection_type === 'smoke' ? 'smoke' : 'fire';
+                    const location = row.location || row.camera_name || 'Unknown location';
+                    const fallbackMessage = `${detectionType === 'fire' ? '🔥 Fire' : '💨 Smoke'} detection at ${location}`;
                     items.push({
                         source: 'detection',
-                        type: row.detection_type === 'smoke' ? 'smoke' : 'fire',
-                        level: 'info',
-                        location: row.location || row.camera_name || 'Unknown location',
+                        detectionId: row.id,
+                        type: detectionType,
+                        level: detectionType === 'fire' ? 'critical' : 'info',
+                        location,
                         time,
-                        rawMessage: ''
+                        rawMessage: row.message || fallbackMessage
                     });
                 });
             }
@@ -263,18 +341,21 @@
                         ? (item.rawMessage || `${item.type === 'fire' ? '🔥 Fire alert' : '💨 Smoke alert'} at ${item.location}`)
                         : `${item.type === 'fire' ? '🔥 Fire detection' : '💨 Smoke detection'} at ${item.location}`;
 
-                const showAdminActions =
-                    item.source === 'alert' && item.id && (!item.admin_status || item.admin_status === 'pending');
+                const showAdminActions = (item.source === 'alert' && item.id) || item.source === 'detection';
 
-                const actionsSection = showAdminActions
+                // Always render buttons; disable and relabel if already decided
+                const acceptLabel = (item.source === 'alert' && item.admin_status === 'accepted') ? 'Accepted' : 'Accept';
+                const declineLabel = (item.source === 'alert' && item.admin_status === 'declined') ? 'Declined' : 'Decline';
+                const acceptDisabled = (item.source === 'alert' && item.admin_status && item.admin_status !== 'pending');
+                const declineDisabled = (item.source === 'alert' && item.admin_status && item.admin_status !== 'pending');
+
+                const shouldRenderActions = showAdminActions;
+                const actionsSection = shouldRenderActions
                     ? `<div class="alert-actions-inline">
-                            <button class="btn btn-small btn-accept" onclick="handleAdminAlertAction(${item.id}, 'accept', this)">Accept</button>
-                            <button class="btn btn-small btn-decline" onclick="handleAdminAlertAction(${item.id}, 'decline', this)">Decline</button>
+                            <button class="btn btn-small btn-accept" type="button" ${acceptDisabled ? 'disabled' : ''}>${acceptLabel}</button>
+                            <button class="btn btn-small btn-decline" type="button" ${declineDisabled ? 'disabled' : ''}>${declineLabel}</button>
                        </div>`
-                    : `<div class="alert-actions-inline">
-                            <button class="btn btn-small btn-accept" onclick="dismissInlineAlert(this)">Accept</button>
-                            <button class="btn btn-small btn-decline" onclick="dismissInlineAlert(this)">Decline</button>
-                       </div>`;
+                    : '';
 
                 const div = document.createElement('div');
                 div.className = `alert-item ${alertClass}`;
@@ -286,6 +367,7 @@
                     ${actionsSection}
                 `;
                 alertsList.appendChild(div);
+                wireAlertActionButtons(div, item);
             });
 
             // Update system status banner based on current alerts/detections
@@ -802,15 +884,15 @@
             initMap();
             initChart();
             await fetchData();
-            
-            // Auto-refresh data every 3 seconds
-            setInterval(fetchData, 3000);
-            
-            // Auto-refresh camera feeds every 500ms
-            setInterval(refreshCameraFeeds, 500);
-            
+
+            // Auto-refresh data every 10 seconds (reduced frequency to prevent excessive requests)
+            setInterval(fetchData, 10000);
+
+            // Auto-refresh camera feeds every 2 seconds (reduced frequency)
+            setInterval(refreshCameraFeeds, 2000);
+
             console.log('Dashboard initialized');
-            console.log('Data refreshes every 3 seconds');
+            console.log('Data refreshes every 10 seconds');
         }
 
         document.addEventListener('DOMContentLoaded', init);

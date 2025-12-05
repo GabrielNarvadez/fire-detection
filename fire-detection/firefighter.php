@@ -1,3 +1,33 @@
+<?php
+session_start();
+include 'assets/functions.php';
+
+// Check if firefighter is logged in
+if (!isset($_SESSION['firefighter_id'])) {
+    header('Location: login.php');
+    exit;
+}
+
+// Get firefighter data
+$db = getDB();
+$stmt = $db->prepare("SELECT * FROM firefighters WHERE id = :id");
+$stmt->bindValue(':id', $_SESSION['firefighter_id'], SQLITE3_INTEGER);
+$result = $stmt->execute();
+
+if ($result) {
+    $firefighter = $result->fetchArray(SQLITE3_ASSOC);
+} else {
+    $firefighter = null;
+}
+
+if (!$firefighter) {
+    // Invalid session, redirect to login
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,15 +44,23 @@
             <div class="logo-icon">🚒</div>
             <h1>Firefighter Alert</h1>
         </div>
-        <div class="status-badge" id="statusBadge">● STANDBY</div>
+        <div class="header-right">
+            <div class="firefighter-info">
+                <span class="firefighter-name"><?php echo htmlspecialchars($firefighter['name'] ?? 'Unknown'); ?></span>
+                <span class="station-info">Station <?php echo htmlspecialchars($firefighter['station'] ?? 'N/A'); ?></span>
+            </div>
+            <a href="logout.php" class="logout-btn">Logout</a>
+            <div class="status-badge" id="statusBadge">● STANDBY</div>
+        </div>
     </div>
 
     <div class="container">
         <!-- Info Bar -->
         <div class="info-bar">
+            <div class="info-item">👨‍🚒 <span><?php echo htmlspecialchars($firefighter['name']); ?></span></div>
             <div class="info-item">📅 <span id="currentDate">-</span></div>
             <div class="info-item">🕐 <span id="currentTime">-</span></div>
-            <div class="info-item">🏢 <span>Station 1</span></div>
+            <div class="info-item">🏢 <span>Station <?php echo htmlspecialchars($firefighter['station']); ?></span></div>
         </div>
 
         <!-- No Alert State -->
