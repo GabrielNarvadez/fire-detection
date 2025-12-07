@@ -511,18 +511,32 @@ if (isset($_GET['api'])) {
     }
     
     // Get stats
-    $today = date('Y-m-d');
-    $stats = $db->querySingle("SELECT * FROM stats WHERE date='$today'", true);
-    if (!$stats) {
-        $stats = [
-            'detections_today' => 0,
-            'fire_today' => 0,
-            'smoke_today' => 0,
-            'avg_response_time' => 3.2
-        ];
-    }
-    $stats['active_cameras'] = $db->querySingle("SELECT COUNT(*) FROM cameras WHERE status='online'");
-    $stats['personnel_online'] = $db->querySingle("SELECT COUNT(*) FROM personnel WHERE status='online'");
+  // Get stats
+$stats = $db->querySingle("
+    SELECT
+        date('now') AS date,
+        COUNT(*) AS detections_today,
+        SUM(CASE WHEN detection_type = 'fire' THEN 1 ELSE 0 END) AS fire_today,
+        SUM(CASE WHEN detection_type = 'smoke' THEN 1 ELSE 0 END) AS smoke_today,
+        3.2 AS avg_response_time
+    FROM detections
+    WHERE date(timestamp) = date('now')
+", true);
+
+if (!$stats) {
+    // Fallback in case there are no rows at all
+    $stats = [
+        'date' => date('Y-m-d'),
+        'detections_today' => 0,
+        'fire_today' => 0,
+        'smoke_today' => 0,
+        'avg_response_time' => 3.2
+    ];
+}
+
+$stats['active_cameras'] = $db->querySingle("SELECT COUNT(*) FROM cameras WHERE status='online'");
+$stats['personnel_online'] = $db->querySingle("SELECT COUNT(*) FROM personnel WHERE status='online'");
+
     
     // Get detection history (last 24 hours, 30-min intervals)
     $detection_history = [];

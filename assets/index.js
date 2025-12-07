@@ -209,7 +209,13 @@
                 labels.push(label);
 
                 // Find matching data
-                const key = intervalTime.toISOString().replace('T', ' ').split('.')[0];
+                const key =
+                intervalTime.getFullYear() + '-' +
+                String(intervalTime.getMonth() + 1).padStart(2, '0') + '-' +
+                String(intervalTime.getDate()).padStart(2, '0') + 'T' +
+                String(intervalTime.getHours()).padStart(2, '0') + ':' +
+                String(intervalTime.getMinutes()).padStart(2, '0') + ':00';
+
                 const data = dataMap[key] || { fire_count: 0, smoke_count: 0 };
                 fireData.push(data.fire_count);
                 smokeData.push(data.smoke_count);
