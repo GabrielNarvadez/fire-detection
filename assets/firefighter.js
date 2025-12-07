@@ -1,7 +1,10 @@
-
+// firefighter.js
 		let soundEnabled = true;
 		let currentAlert = null;
 		let alertHistory = JSON.parse(localStorage.getItem('ffAlertHistory')) || [];
+		let lastBackendAlertId = null;
+
+		
 
 		const sampleAlerts = [
 			{ type: 'fire', location: 'Building A - Warehouse', area: 'Industrial Zone', confidence: '94%' },
@@ -9,17 +12,36 @@
 			{ type: 'fire', location: 'Residential Block 7', area: 'Housing Complex', confidence: '91%' }
 		];
 
+		function parseLocationFromMessage(message, fallbackLocation) {
+    if (typeof message !== 'string') {
+        return fallbackLocation || 'Unknown';
+    }
+
+    const lower = message.toLowerCase();
+    const atIndex = lower.indexOf(' at ');
+    if (atIndex === -1) {
+        return fallbackLocation || 'Unknown';
+    }
+
+    let loc = message.substring(atIndex + 4);
+    const dashIndex = loc.indexOf(' -');
+    if (dashIndex !== -1) {
+        loc = loc.substring(0, dashIndex);
+    }
+
+    loc = loc.trim();
+    return loc || (fallbackLocation || 'Unknown');
+}
+
+
 		// Map a backend alert row (from alerts table) into the UI-friendly alert object
 		function mapBackendAlertToUi(row) {
 			const message = row.message || '';
 			const lower = message.toLowerCase();
 			const type = lower.includes('smoke') ? 'smoke' : 'fire';
 
-			let location = '-';
-			const parts = message.split('at ');
-			if (parts.length > 1) {
-				location = parts[1].split(' -')[0];
-			}
+			const location = parseLocationFromMessage(message, '-');
+
 
 			const confidenceMatch = message.match(/\d+%/);
 			const confidence = confidenceMatch ? confidenceMatch[0] : 'High';
@@ -36,40 +58,36 @@
 
 		async function loadBackendData() {
 			try {
-				const [alertsRes, detectionsRes] = await Promise.all([
-					fetch('fetch_alerts.php'),
-					fetch('fetch_detections.php')
-				]);
-
+				const alertsRes = await fetch('fetch_alerts.php');
 				const alerts = await alertsRes.json();
-				const detections = await detectionsRes.json();
 
 				if (Array.isArray(alerts) && alerts.length > 0) {
-					// Show the most recent active alert for firefighters
 					const latest = alerts[0];
-					showAlert(mapBackendAlertToUi(latest));
+
+					if (latest.id !== lastBackendAlertId) {
+						lastBackendAlertId = latest.id;
+						showAlert(mapBackendAlertToUi(latest));
+					}
 				} else {
-					// Only clear when there is no demo/test alert currently being shown
 					if (!currentAlert || !currentAlert.demo) {
 						clearAlert();
+						lastBackendAlertId = null;
 					}
 				}
 
-				if (Array.isArray(detections)) {
-					// Recent Alerts panel is driven by firefighter decisions (acknowledge/respond)
-					// so we render from local alert history instead of raw detections.
-					renderHistory();
-				}
+				// Optional: If you still want detections for sidebar history,
+				// you can fetch them here. Otherwise leave detections out entirely.
+
 			} catch (e) {
 				console.error('Failed to load firefighter backend data', e);
 			}
 		}
 
-		function startBackendPolling() {
-			loadBackendData();
-			// Poll every 5 seconds for new alerts/detections
-			setInterval(loadBackendData, 5000);
-		}
+function startBackendPolling() {
+    loadBackendData();
+    setInterval(loadBackendData, 5000);
+}
+
 
 		function updateTime() {
             const now = new Date();
@@ -129,16 +147,16 @@
 			// Update backend so other views know this alert is being responded to
 			if (currentAlert.id) {
 				try {
-					await fetch('assets/functions.php?update_alert=1', {
+					await fetch('handle_firefighter_action.php', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							id: currentAlert.id,
-							firefighter_status: 'responding'
+							alert_id: currentAlert.id,
+							status: 'responding'
 						})
 					});
 				} catch (e) {
-					console.error('Failed to update firefighter status to responding', e);
+					console.error('Failed to set responding status', e);
 				}
 			}
 
@@ -157,16 +175,16 @@
 			// Update backend so this alert is marked as seen by firefighters
 			if (currentAlert.id) {
 				try {
-					await fetch('assets/functions.php?update_alert=1', {
+					await fetch('handle_firefighter_action.php', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							id: currentAlert.id,
-							firefighter_status: 'acknowledged'
+							alert_id: currentAlert.id,
+							status: 'acknowledged'
 						})
 					});
 				} catch (e) {
-					console.error('Failed to update firefighter status to acknowledged', e);
+					console.error('Failed to set acknowledged status', e);
 				}
 			}
 

@@ -1,6 +1,6 @@
 <?php
 include 'assets/functions.php';
-
+//handle_alert.php
 header('Content-Type: application/json');
 
 try {

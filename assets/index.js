@@ -6,6 +6,33 @@
         let editingFirefighterId = null;
         let editingPersonnelId = null;
 
+
+        // Safely parse a location from a message like "🔥 Fire at Building A - Warehouse"
+function parseLocationFromMessage(message, fallbackLocation) {
+    if (typeof message !== 'string') {
+        return fallbackLocation || 'Unknown';
+    }
+
+    const lower = message.toLowerCase();
+    const atIndex = lower.indexOf(' at ');
+    if (atIndex === -1) {
+        return fallbackLocation || 'Unknown';
+    }
+
+    // Everything after " at "
+    let loc = message.substring(atIndex + 4);
+
+    // Strip a trailing " - something" if present
+    const dashIndex = loc.indexOf(' -');
+    if (dashIndex !== -1) {
+        loc = loc.substring(0, dashIndex);
+    }
+
+    loc = loc.trim();
+    return loc || (fallbackLocation || 'Unknown');
+}
+
+
         // Helper to format ISO timestamps from backend into readable strings
         function formatTimestamp(timestamp) {
             try {
@@ -167,10 +194,10 @@
             const adminStatus = action === 'accept' ? 'accepted' : 'declined';
 
             try {
-                const response = await fetch('assets/functions.php?update_alert=1', {
+                const response = await fetch('handle_alert.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id: alertId, admin_status: adminStatus })
+                    body: JSON.stringify({ alert_id: alertId, action: action })
                 });
 
                 const result = await response.json();
@@ -186,10 +213,9 @@
                 // If accepted, show emergency modal for firefighter notification
                 if (action === 'accept') {
                     // Get alert details for the modal
-                    const alerts = dashboardData?.alerts || [];
-                    const alert = alerts.find(a => a.id === alertId);
-                    if (alert) {
-                        showEmergency(alert);
+                    const alertData = dashboardData?.alerts?.find(a => a.id === alertId);
+                    if (alertData && !emergencyActive) {
+                        showEmergency(alertData, alertId);
                     }
                 }
 
@@ -246,7 +272,7 @@
 
                 // If accepted, show emergency modal
                 if (action === 'accept') {
-                    showEmergency(item);
+                    showEmergency(item, result.id);
                 }
 
                 fetchData();
@@ -268,10 +294,14 @@
                     const lower = message.toLowerCase();
                     const type = lower.includes('smoke') ? 'smoke' : 'fire';
                     const time = row.timestamp ? new Date(row.timestamp) : new Date();
-                    let location = '-';
-                    const parts = message.split('at ');
-                    if (parts.length > 1) {
-                        location = parts[1].split(' -')[0];
+                    const location = parseLocationFromMessage(message, '-');
+
+
+                    const adminStatus = row.admin_status || 'pending';
+
+                    // Hide alerts that are already accepted or declined
+                    if (adminStatus !== 'pending') {
+                        return;
                     }
 
                     items.push({
@@ -282,10 +312,11 @@
                         location,
                         time,
                         rawMessage: message,
-                        admin_status: row.admin_status || 'pending',
+                        admin_status: adminStatus,
                         firefighter_status: row.firefighter_status || 'pending'
                     });
                 });
+
             }
 
             // Always include recent detections (real-time from cameras)
@@ -470,13 +501,29 @@
         // ========================================
         // EMERGENCY MODAL
         // ========================================
-        function showEmergency(alert) {
-            emergencyActive = true;
-            document.getElementById('emergencyLocation').textContent = alert.message.split('at ')[1]?.split(' -')[0] || 'Unknown';
-            document.getElementById('emergencyCamera').textContent = 'Camera Detection';
-            document.getElementById('emergencyConfidence').textContent = alert.message.match(/\d+%/)?.[0] || 'High';
-            document.getElementById('emergencyModal').classList.add('active');
-        }
+function showEmergency(alert, alertId) {
+    emergencyActive = true;
+
+    const message =
+        (alert && (alert.message || alert.rawMessage)) 
+            ? (alert.message || alert.rawMessage) 
+            : '';
+
+    const location = parseLocationFromMessage(
+        message,
+        (alert && alert.location) ? alert.location : 'Unknown'
+    );
+
+    const confidenceMatch = typeof message === 'string' ? message.match(/\d+%/) : null;
+    const confidence = confidenceMatch ? confidenceMatch[0] : 'High';
+
+    document.getElementById('emergencyLocation').textContent = location;
+    document.getElementById('emergencyCamera').textContent = 'Camera Detection';
+    document.getElementById('emergencyConfidence').textContent = confidence;
+    document.getElementById('emergencyModal').classList.add('active');
+    document.getElementById('emergencyModal').dataset.alertId = alertId;
+}
+
 
         function closeEmergency() {
             emergencyActive = false;
@@ -489,12 +536,14 @@
         let currentAlert = null;
 
         function showNotificationSelection() {
+            const alertId = document.getElementById('emergencyModal').dataset.alertId;
             currentAlert = {
                 location: document.getElementById('emergencyLocation').textContent,
                 camera: document.getElementById('emergencyCamera').textContent,
-                confidence: document.getElementById('emergencyConfidence').textContent
+                confidence: document.getElementById('emergencyConfidence').textContent,
+                id: alertId
             };
-
+            
             closeEmergency();
             
             const container = document.getElementById('firefighterCheckboxes');

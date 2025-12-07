@@ -145,14 +145,6 @@ if (!$firefighter) {
 
 
         <script src="assets/firefighter.js"></script>
-        <script>
-        async function fetchAlerts() {
-            const response = await fetch('fetch_alerts.php');
-            const data = await response.json();
-            console.log(data); // Replace with rendering logic
-        }
 
-        fetchAlerts();
-    </script>
 </body>
 </html>

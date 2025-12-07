@@ -1,4 +1,4 @@
-<?php
+<?php //fetch_detections.php
 include 'assets/functions.php';
 
 header('Content-Type: application/json');
