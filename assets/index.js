@@ -185,46 +185,64 @@
         // ========================================
         function updateChart(historyData) {
             if (!detectionChart) return;
+ const BUCKET_MS = 30 * 60 * 1000;  // 30 minutes in milliseconds
 
-            // Generate labels for last 24 hours in 30-min intervals
-            const labels = [];
-            const fireData = [];
-            const smokeData = [];
-            
-            // Create a map of existing data
-            const dataMap = {};
-            historyData.forEach(item => {
-                const key = item.interval_start;
-                dataMap[key] = item;
-            });
+ // Map from time-bucket (ms since epoch) to aggregated counts
+ const dataMap = {};
 
-            // Generate 48 intervals (24 hours * 2)
-            const now = new Date();
-            for (let i = 47; i >= 0; i--) {
-                const intervalTime = new Date(now.getTime() - (i * 30 * 60 * 1000));
-                const minute = Math.floor(intervalTime.getMinutes() / 30) * 30;
-                intervalTime.setMinutes(minute, 0, 0);
-                
-                const label = intervalTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-                labels.push(label);
+ historyData.forEach(item => {
+     const d = new Date(item.interval_start);  // e.g. "2025-12-08T05:00:00"
+     const time = d.getTime();
 
-                // Find matching data
-                const key =
-                intervalTime.getFullYear() + '-' +
-                String(intervalTime.getMonth() + 1).padStart(2, '0') + '-' +
-                String(intervalTime.getDate()).padStart(2, '0') + 'T' +
-                String(intervalTime.getHours()).padStart(2, '0') + ':' +
-                String(intervalTime.getMinutes()).padStart(2, '0') + ':00';
+     if (isNaN(time)) {
+         console.warn("Cannot parse interval_start:", item.interval_start, item);
+         return;
+     }
 
-                const data = dataMap[key] || { fire_count: 0, smoke_count: 0 };
-                fireData.push(data.fire_count);
-                smokeData.push(data.smoke_count);
-            }
+     // Floor to the previous 30-minute bucket
+     const bucketTime = Math.floor(time / BUCKET_MS) * BUCKET_MS;
 
-            detectionChart.data.labels = labels;
-            detectionChart.data.datasets[0].data = fireData;
-            detectionChart.data.datasets[1].data = smokeData;
-            detectionChart.update('none');
+     if (!dataMap[bucketTime]) {
+         dataMap[bucketTime] = { fire_count: 0, smoke_count: 0 };
+     }
+
+     dataMap[bucketTime].fire_count += Number(item.fire_count) || 0;
+     dataMap[bucketTime].smoke_count += Number(item.smoke_count) || 0;
+ });
+
+ const labels = [];
+ const fireData = [];
+ const smokeData = [];
+ const now = new Date();
+
+ // Build the last 24 hours in 30-minute buckets
+ for (let i = 47; i >= 0; i--) {
+     const intervalTime = new Date(now.getTime() - i * BUCKET_MS);
+
+     // Snap the minutes to 0 or 30 for display label
+     const minute = Math.floor(intervalTime.getMinutes() / 30) * 30;
+     intervalTime.setMinutes(minute, 0, 0);
+
+     const bucketTime = Math.floor(intervalTime.getTime() / BUCKET_MS) * BUCKET_MS;
+
+     labels.push(
+         intervalTime.toLocaleTimeString("en-US", {
+             hour: "2-digit",
+             minute: "2-digit"
+         })
+     );
+
+     const bucketData = dataMap[bucketTime] || { fire_count: 0, smoke_count: 0 };
+
+     fireData.push(bucketData.fire_count);
+     smokeData.push(bucketData.smoke_count);
+ }
+
+ detectionChart.data.labels = labels;
+ detectionChart.data.datasets[0].data = fireData;
+ detectionChart.data.datasets[1].data = smokeData;
+ detectionChart.update("none");
+
         }
 
         // ========================================
