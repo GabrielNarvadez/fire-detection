@@ -18,3 +18,5 @@ __pycache__
 *.db
 fire_detection.db
 /fire_detection.db
+camera_frames
+/camera_frames
