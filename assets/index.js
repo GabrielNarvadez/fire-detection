@@ -253,8 +253,14 @@
 function showEmergency(alert) {
     emergencyActive = true;
 
-    const location = alert.message.split('at ')[1]?.split(' -')[0] || 'Unknown';
-    const confidence = alert.message.match(/\d+%/)?.[0] || 'High';
+    // Find the corresponding detection object from the dashboard data
+    const detection = dashboardData?.detections?.find(d => d.id === alert.detection_id);
+
+    // Use detection data if available, otherwise fall back to parsing from message or defaults
+    const location = detection?.location || alert.message.split('at ')[1]?.split(' -')[0] || 'Unknown';
+    const cameraName = detection?.camera_name || 'Camera Detection';
+    const rawConfidence = detection?.confidence; // This will be the float, e.g., 0.753
+    const formattedConfidence = rawConfidence != null ? `${(rawConfidence * 100).toFixed(1)}%` : 'High'; // Format as "75.3%"
 
     // Keep ids and add parsed fields
     currentAlert = {
@@ -262,15 +268,15 @@ function showEmergency(alert) {
         detection_id: alert.detection_id,
         alert_level: alert.alert_level,
         status: alert.status,
-        message: alert.message,
+        message: alert.message, // Keep original message for context
         location,
-        camera: 'Camera Detection',
-        confidence
+        camera: cameraName,
+        confidence: rawConfidence // Store the numeric confidence for consistency
     };
 
     document.getElementById('emergencyLocation').textContent = location;
-    document.getElementById('emergencyCamera').textContent = 'Camera Detection';
-    document.getElementById('emergencyConfidence').textContent = confidence;
+    document.getElementById('emergencyCamera').textContent = cameraName;
+    document.getElementById('emergencyConfidence').textContent = formattedConfidence;
     document.getElementById('emergencyModal').classList.add('active');
 }
 
@@ -450,6 +456,9 @@ try {
                 if (ff) selectedFirefighters.push(ff);
             });
 
+            // Format confidence for the message
+            const formattedConfidence = currentAlert.confidence != null ? `${(currentAlert.confidence * 100).toFixed(1)}%` : 'High';
+
             if (selectedFirefighters.length === 0) {
                 alert('Please select at least one firefighter to notify');
                 return;
@@ -459,7 +468,7 @@ try {
             selectedFirefighters.forEach(ff => {
                 message += `✓ ${ff.name} (${ff.phone})\n`;
             });
-            message += `\nMessage: "FIRE ALERT at ${currentAlert.location}. Confidence: ${currentAlert.confidence}. Respond immediately."`;
+            message += `\nMessage: "FIRE ALERT at ${currentAlert.location}. Confidence: ${formattedConfidence}. Respond immediately."`;
 
             alert(message);
             closeNotificationModal();
@@ -689,36 +698,38 @@ try {
         // MAP INITIALIZATION
         // ========================================
         function initMap() {
-            map = L.map('map').setView([14.5995, 120.9842], 13);
+            map = L.map('map').setView([10.9543, 125.0196], 17);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
 
             const cameraIcon = L.divIcon({
-                html: '<div style="background: #e94560; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white;">📹</div>',
+                html: '<div style="background: #e94560; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white; font-size: 16px;">📹</div>',
                 iconSize: [30, 30]
             });
 
-            L.marker([14.6005, 120.9850], {icon: cameraIcon})
+            L.marker([10.9543, 125.0196], {icon: cameraIcon})
                 .addTo(map)
-                .bindPopup('<strong>Camera 1 - Visual ML</strong><br>Building A - Warehouse');
-
-            L.marker([14.6010, 120.9855], {icon: cameraIcon})
-                .addTo(map)
-                .bindPopup('<strong>Camera 2 - Thermal</strong><br>Building A - Warehouse');
+                .bindPopup('<strong>Camera 1 & 2</strong><br>EVSU - Dulag Campus');
 
             const stationIcon = L.divIcon({
-                html: '<div style="background: #5352ed; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white;">🚒</div>',
+                html: '<div style="background: #5352ed; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white; font-size: 20px;">🚒</div>',
                 iconSize: [35, 35]
             });
 
-            L.marker([14.5950, 120.9800], {icon: stationIcon})
+            // Use the accurate coordinates for the real Dulag Fire Station
+            L.marker([10.9548, 125.0233], {icon: stationIcon})
                 .addTo(map)
-                .bindPopup('<strong>Fire Station 1</strong><br>6 firefighters ready');
+                .bindPopup('<strong>Dulag Fire Station</strong><br>Station 1');
 
-            L.marker([14.6040, 120.9900], {icon: stationIcon})
+            // Add two more placeholder stations
+            L.marker([11.0380, 125.0350], {icon: stationIcon})
                 .addTo(map)
-                .bindPopup('<strong>Fire Station 2</strong><br>6 firefighters ready');
+                .bindPopup('<strong>Tolosa Fire Station</strong><br>Station 2');
+
+            L.marker([10.8880, 125.0070], {icon: stationIcon})
+                .addTo(map)
+                .bindPopup('<strong>Mayorga Fire Station</strong><br>Station 3');
         }
 
         // ========================================

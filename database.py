@@ -213,8 +213,8 @@ def _insert_default_data(cursor, conn):
     cursor.execute("SELECT COUNT(*) FROM cameras")
     if cursor.fetchone()[0] == 0:
         cameras = [
-            (1, 'Camera 1 - Visual ML', 'visual', 'Building A - Warehouse', 14.6005, 120.9850, 'offline', 22.0, 'camera_frames/camera1_live.jpg'),
-            (2, 'Camera 2 - Thermal', 'thermal', 'Building A - Warehouse', 14.6010, 120.9855, 'offline', 22.5, 'camera_frames/camera2_live.jpg')
+            (1, 'Camera 1 - Visual ML', 'visual', 'EVSU - Dulag Campus', 10.9543, 125.0196, 'offline', 22.0, 'camera_frames/camera1_live.jpg'),
+            (2, 'Camera 2 - Thermal', 'thermal', 'EVSU - Dulag Campus', 10.9543, 125.0196, 'offline', 22.5, 'camera_frames/camera2_live.jpg')
         ]
         cursor.executemany('''
             INSERT INTO cameras (id, name, type, location, latitude, longitude, status, temperature, frame_path)
@@ -225,8 +225,9 @@ def _insert_default_data(cursor, conn):
     cursor.execute("SELECT COUNT(*) FROM stations")
     if cursor.fetchone()[0] == 0:
         stations = [
-            (1, 'Fire Station 1', 14.5950, 120.9800, 6),
-            (2, 'Fire Station 2', 14.6040, 120.9900, 6)
+            (1, 'Dulag Fire Station', 10.9548, 125.0233, 6),
+            (2, 'Tolosa Fire Station', 11.0380, 125.0350, 4),
+            (3, 'Mayorga Fire Station', 10.8880, 125.0070, 4)
         ]
         cursor.executemany('''
             INSERT INTO stations (id, name, latitude, longitude, personnel_count)

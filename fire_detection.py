@@ -293,28 +293,22 @@ def detect_from_webcam(camera_id=1):
         cv2.destroyAllWindows()
 
 def detect_dual_cameras():
-    """Run detection on two cameras simultaneously"""
+    """Run detection on a single webcam, simulating a second thermal camera."""
     print(f"\n{'='*60}")
-    print("DUAL CAMERA MODE")
+    print("DUAL CAMERA MODE (Visual + Simulated Thermal)")
     print(f"{'='*60}")
     
     cap1 = cv2.VideoCapture(0)
-    cap2 = cv2.VideoCapture(1)
     
     if not cap1.isOpened():
-        print("Error: Could not open camera 1")
+        print("Error: Could not open webcam.")
         return
     
     refresh_camera_cache()
     
     update_camera_status(1, 'online')
+    update_camera_status(2, 'online')
     add_activity('Dual camera monitoring started')
-    
-    has_camera2 = cap2.isOpened()
-    if has_camera2:
-        update_camera_status(2, 'online')
-    else:
-        print("Camera 2 not available, using single camera mode")
     
     print("Press 'q' to quit")
     print("Camera feeds are streaming to dashboard at http://localhost:8000")
@@ -325,21 +319,37 @@ def detect_dual_cameras():
     detection_cooldown_2 = 0
     last_frame_save = 0
     
+    # Create a CLAHE object for contrast enhancement in the thermal view
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    
     try:
         while True:
             ret1, frame1 = cap1.read()
             if not ret1:
+                print("Webcam feed ended.")
                 break
             
             frame_count += 1
+ 
+            # Create a more realistic simulated thermal frame based on light intensity
+            # 1. Convert to grayscale.
+            # 2. Enhance contrast to make bright areas (higher intensity) stand out.
+            # 3. Downscale to create a "pixelated" effect.
+            # 4. Upscale back to original size using nearest-neighbor to keep the blocks.
+            # 5. Apply a thermal colormap (JET: blue=cold, red=hot).
+            h, w, _ = frame1.shape
+            thermal_w = 32  # Width of the thermal pixel grid
+            thermal_h = int(h * (thermal_w / w))
+            gray_frame = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+            enhanced_gray = clahe.apply(gray_frame)
+            small_pixelated = cv2.resize(enhanced_gray, (thermal_w, thermal_h), interpolation=cv2.INTER_AREA)
+            pixelated_gray = cv2.resize(small_pixelated, (w, h), interpolation=cv2.INTER_NEAREST)
+            frame2 = cv2.applyColorMap(pixelated_gray, cv2.COLORMAP_HOT)
 
             update_frame_buffer(1, frame1)
+            update_frame_buffer(2, frame2)
             handle_pending_clips(1)
-            
-            if frame_count - last_frame_save >= 10:
-                frame1_path = os.path.join(CAMERA_FRAMES_DIR, "camera1_live.jpg")
-                cv2.imwrite(frame1_path, frame1)
-                last_frame_save = frame_count
+            handle_pending_clips(2)
             
             if frame_count % 5 == 0:
                 results1 = model.predict(source=frame1, verbose=False)
@@ -355,48 +365,42 @@ def detect_dual_cameras():
             else:
                 annotated_frame1 = frame1
             
-            if has_camera2:
-                ret2, frame2 = cap2.read()
-                if ret2:
-                    update_frame_buffer(2, frame2)
-                    handle_pending_clips(2)
-
-                    if frame_count - last_frame_save >= 10:
-                        frame2_path = os.path.join(CAMERA_FRAMES_DIR, "camera2_live.jpg")
-                        cv2.imwrite(frame2_path, frame2)
-                    
-                    if frame_count % 5 == 0:
-                        results2 = model.predict(source=frame2, verbose=False)
-                        annotated_frame2 = results2[0].plot()
-                        
-                        should_save_2 = (detection_cooldown_2 <= 0)
-                        detection_info_2 = process_detection_results(results2, 2, frame2, save_image=should_save_2)
-                        
-                        if detection_info_2.get('detection_id'):
-                            detection_cooldown_2 = 300
-                        if detection_cooldown_2 > 0:
-                            detection_cooldown_2 -= 1
-                        
-                        temp = 22 + (detection_info_2.get('max_fire_confidence', 0) * 100)
-                        update_camera_status(2, 'online', temperature=temp)
-                    else:
-                        annotated_frame2 = frame2
-                    
-                    combined = cv2.hconcat([annotated_frame1, annotated_frame2])
-                    cv2.imshow("Dual Camera Detection", combined)
-                else:
-                    cv2.imshow("Camera 1 - Visual ML", annotated_frame1)
+            # Process the simulated thermal frame
+            if frame_count % 5 == 0:
+                # We run prediction on the original frame (frame1) for the thermal camera as well,
+                # as the model is trained on RGB images, not colormapped ones.
+                # We just use the thermal frame (frame2) for visualization.
+                results2 = model.predict(source=frame1, verbose=False)
+                annotated_frame2 = results2[0].plot(img=frame2) # Annotate on the thermal image
+                
+                should_save_2 = (detection_cooldown_2 <= 0)
+                detection_info_2 = process_detection_results(results2, 2, frame1, save_image=should_save_2)
+                
+                if detection_info_2.get('detection_id'):
+                    detection_cooldown_2 = 300
+                if detection_cooldown_2 > 0:
+                    detection_cooldown_2 -= 1
+                
+                temp = 22 + (detection_info_2.get('max_fire_confidence', 0) * 100)
+                update_camera_status(2, 'online', temperature=temp)
             else:
-                cv2.imshow("Camera 1 - Visual ML", annotated_frame1)
-            
+                annotated_frame2 = frame2
+
+            # Save live frames for the dashboard
+            if frame_count - last_frame_save >= 10:
+                cv2.imwrite(os.path.join(CAMERA_FRAMES_DIR, "camera1_live.jpg"), annotated_frame1)
+                cv2.imwrite(os.path.join(CAMERA_FRAMES_DIR, "camera2_live.jpg"), annotated_frame2)
+                last_frame_save = frame_count
+
+            combined = cv2.hconcat([annotated_frame1, annotated_frame2])
+            cv2.imshow("Dual Camera Detection (Visual | Thermal)", combined)
+
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
     
     finally:
         update_camera_status(1, 'offline')
-        if has_camera2:
-            update_camera_status(2, 'offline')
-            cap2.release()
+        update_camera_status(2, 'offline')
         add_activity('Dual camera monitoring stopped')
         cap1.release()
         cv2.destroyAllWindows()
@@ -404,35 +408,11 @@ def detect_dual_cameras():
 def main():
     add_activity('Fire detection system started')
     
-    while True:
-        print("\n" + "="*60)
-        print("FIRE AND SMOKE DETECTION SYSTEM")
-        print("="*60)
-        print("1. Dual camera detection (Camera 1 and 2)")
-        print("2. Single webcam (Camera 1)")
-        print("3. View statistics")
-        print("4. Exit")
-        print("="*60)
-        choice = input("Select option (1-4): ").strip()
-        
-        if choice == "1":
-            detect_dual_cameras()
-        elif choice == "2":
-            detect_from_webcam(camera_id=1)
-        elif choice == "3":
-            stats = get_stats()
-            print(f"\nToday's Statistics:")
-            print(f"   Fire detections: {stats.get('fire_today', 0)}")
-            print(f"   Smoke detections: {stats.get('smoke_today', 0)}")
-            print(f"   Total detections: {stats.get('detections_today', 0)}")
-            print(f"   Active cameras: {stats.get('active_cameras', 0)}")
-            print(f"   Personnel online: {stats.get('personnel_online', 0)}")
-        elif choice == "4":
-            add_activity('Fire detection system stopped')
-            print("Exiting...")
-            break
-        else:
-            print("Invalid choice.")
+    # Directly start the dual camera detection without showing a menu.
+    detect_dual_cameras()
+    
+    add_activity('Fire detection system stopped')
+    print("Exiting...")
 
 if __name__ == "__main__":
     main()
