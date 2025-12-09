@@ -179,6 +179,53 @@ function initDatabase() {
             UNIQUE(interval_start)
         )
     ');
+
+    // Notifications table
+$db->exec('
+    CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id INTEGER,
+        firefighter_id INTEGER,
+        message TEXT,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT "sent"
+    )
+');
+
+// Firefighter alerts (per-station / per-firefighter)
+$db->exec('
+    CREATE TABLE IF NOT EXISTS firefighter_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id INTEGER,
+        detection_id INTEGER,
+        firefighter_id INTEGER,
+        station_id INTEGER,
+        alert_type TEXT NOT NULL,
+        location TEXT,
+        area TEXT,
+        confidence REAL,
+        status TEXT DEFAULT "pending",
+        response_type TEXT,
+        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        responded_at TIMESTAMP
+    )
+');
+
+// Firefighter stats
+$db->exec('
+    CREATE TABLE IF NOT EXISTS firefighter_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        firefighter_id INTEGER UNIQUE,
+        total_responded INTEGER DEFAULT 0,
+        total_acknowledged INTEGER DEFAULT 0,
+        total_alerts_today INTEGER DEFAULT 0,
+        avg_response_time_seconds REAL DEFAULT 0,
+        last_response_at TIMESTAMP,
+        stats_date DATE
+    )
+');
+
+
     
     // Insert default data
     insertDefaultData($db);
@@ -455,6 +502,173 @@ if (isset($_GET['update_alert'])) {
     }
     exit;
 }
+
+// Broadcast alert from main dashboard to one or more stations
+if (isset($_GET['station_alert'])) {
+    header('Content-Type: application/json');
+    $db = getDB();
+    $input = json_decode(file_get_contents('php://input'), true);
+
+    $alertId      = intval($input['alert_id'] ?? 0);
+    $detectionId  = intval($input['detection_id'] ?? 0);
+    $alertType    = $input['alert_type'] ?? 'fire';      // "fire" or "smoke"
+    $location     = $input['location'] ?? 'Unknown';
+    $area         = $input['area'] ?? '';
+    $confidence   = floatval($input['confidence'] ?? 0);
+    $stations     = $input['stations'] ?? [];            // array of station IDs
+
+    if (!$alertId || !$detectionId || empty($stations)) {
+        echo json_encode(['success' => false, 'error' => 'Missing alert_id, detection_id or stations']);
+        exit;
+    }
+
+    $created = [];
+    foreach ($stations as $stationId) {
+        $stationId = intval($stationId);
+
+        // Option 1: station-wide alert (one row per station)
+        $stmt = $db->prepare("
+            INSERT INTO firefighter_alerts
+                (alert_id, detection_id, station_id, alert_type, location, area, confidence, status)
+            VALUES
+                (:alert_id, :detection_id, :station_id, :alert_type, :location, :area, :confidence, 'pending')
+        ");
+        $stmt->bindValue(':alert_id', $alertId, SQLITE3_INTEGER);
+        $stmt->bindValue(':detection_id', $detectionId, SQLITE3_INTEGER);
+        $stmt->bindValue(':station_id', $stationId, SQLITE3_INTEGER);
+        $stmt->bindValue(':alert_type', $alertType, SQLITE3_TEXT);
+        $stmt->bindValue(':location', $location, SQLITE3_TEXT);
+        $stmt->bindValue(':area', $area, SQLITE3_TEXT);
+        $stmt->bindValue(':confidence', $confidence, SQLITE3_FLOAT);
+        $stmt->execute();
+
+        $created[] = $db->lastInsertRowID();
+    }
+
+    echo json_encode(['success' => true, 'created_ids' => $created]);
+    exit;
+}
+
+// Firefighter station dashboard API
+if (isset($_GET['firefighter_station_api'])) {
+    header('Content-Type: application/json');
+    $db = getDB();
+
+    $stationId = intval($_GET['station_id'] ?? 1);  // default Station 1
+
+    // Get most recent pending alert for this station
+    $pendingAlert = null;
+    $result = $db->prepare("
+        SELECT *
+        FROM firefighter_alerts
+        WHERE station_id = :station_id AND status = 'pending'
+        ORDER BY received_at DESC
+        LIMIT 1
+    ");
+    $result->bindValue(':station_id', $stationId, SQLITE3_INTEGER);
+    $res = $result->execute();
+    if ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        $pendingAlert = $row;
+    }
+
+    // History (responded or acknowledged)
+    $history = [];
+    $stmt = $db->prepare("
+        SELECT *
+        FROM firefighter_alerts
+        WHERE station_id = :station_id AND status != 'pending'
+        ORDER BY COALESCE(responded_at, received_at) DESC
+        LIMIT 20
+    ");
+    $stmt->bindValue(':station_id', $stationId, SQLITE3_INTEGER);
+    $res = $stmt->execute();
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        $history[] = $row;
+    }
+
+    // Simple station stats
+    $stats = [
+        'responded' => 0,
+        'today' => 0,
+        'avg_response_time' => null
+    ];
+
+    // Total responded
+    $res = $db->prepare("
+        SELECT COUNT(*) AS total
+        FROM firefighter_alerts
+        WHERE station_id = :station_id AND status = 'responded'
+    ");
+    $res->bindValue(':station_id', $stationId, SQLITE3_INTEGER);
+    $row = $res->execute()->fetchArray(SQLITE3_ASSOC);
+    $stats['responded'] = intval($row['total'] ?? 0);
+
+    // Today count
+    $res = $db->prepare("
+        SELECT COUNT(*) AS today_total
+        FROM firefighter_alerts
+        WHERE station_id = :station_id
+          AND date(received_at) = date('now')
+    ");
+    $res->bindValue(':station_id', $stationId, SQLITE3_INTEGER);
+    $row = $res->execute()->fetchArray(SQLITE3_ASSOC);
+    $stats['today'] = intval($row['today_total'] ?? 0);
+
+    // Average response time (seconds) for responded alerts
+    $res = $db->prepare("
+        SELECT AVG(strftime('%s', responded_at) - strftime('%s', received_at)) AS avg_sec
+        FROM firefighter_alerts
+        WHERE station_id = :station_id AND responded_at IS NOT NULL
+    ");
+    $res->bindValue(':station_id', $stationId, SQLITE3_INTEGER);
+    $row = $res->execute()->fetchArray(SQLITE3_ASSOC);
+    $stats['avg_response_time'] = $row['avg_sec'] !== null ? floatval($row['avg_sec']) : null;
+
+    echo json_encode([
+        'success' => true,
+        'station_id' => $stationId,
+        'pending_alert' => $pendingAlert,
+        'history' => $history,
+        'stats' => $stats
+    ]);
+    exit;
+}
+
+// Firefighter station response handler
+if (isset($_GET['firefighter_station_update'])) {
+    header('Content-Type: application/json');
+    $db = getDB();
+    $input = json_decode(file_get_contents('php://input'), true);
+
+    $ffAlertId    = intval($input['firefighter_alert_id'] ?? 0);
+    $responseType = $input['response_type'] ?? '';  // 'responded' or 'acknowledged'
+
+    if (!$ffAlertId || !in_array($responseType, ['responded', 'acknowledged'])) {
+        echo json_encode(['success' => false, 'error' => 'Invalid data']);
+        exit;
+    }
+
+    $stmt = $db->prepare("
+        UPDATE firefighter_alerts
+        SET status = :status,
+            response_type = :response_type,
+            responded_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+    ");
+    $stmt->bindValue(':status', $responseType, SQLITE3_TEXT);
+    $stmt->bindValue(':response_type', $responseType, SQLITE3_TEXT);
+    $stmt->bindValue(':id', $ffAlertId, SQLITE3_INTEGER);
+    $ok = $stmt->execute();
+
+    if (!$ok) {
+        echo json_encode(['success' => false, 'error' => $db->lastErrorMsg()]);
+        exit;
+    }
+
+    echo json_encode(['success' => true]);
+    exit;
+}
+
 
 // Main API endpoint - get all dashboard data
 if (isset($_GET['api'])) {

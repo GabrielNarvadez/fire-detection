@@ -198,7 +198,7 @@ def process_detection_results(results, camera_id, frame, save_image=True):
             detection_info['detection_id'] = detection_id
             
             # Create alert if high confidence
-            if confidence >= 0.85:
+            if confidence >= 0.6:
                 alert_level = 'critical' if log_type == 'fire' else 'warning'
                 message = f"{log_type.upper()} detected at {camera['location']} - Confidence: {confidence:.1%}"
                 create_alert(detection_id, alert_level, message)

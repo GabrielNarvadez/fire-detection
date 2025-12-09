@@ -1,10 +1,12 @@
 
-        let dashboardData = null;
-        let detectionChart = null;
-        let map = null;
-        let emergencyActive = false;
-        let editingFirefighterId = null;
-        let editingPersonnelId = null;
+    let dashboardData = null;
+    let detectionChart = null;
+    let map = null;
+    let emergencyActive = false;
+    let editingFirefighterId = null;
+    let editingPersonnelId = null;
+    let currentAlert = null;
+
 
         // Update datetime
         function updateDateTime() {
@@ -248,52 +250,188 @@
         // ========================================
         // EMERGENCY MODAL
         // ========================================
-        function showEmergency(alert) {
-            emergencyActive = true;
-            document.getElementById('emergencyLocation').textContent = alert.message.split('at ')[1]?.split(' -')[0] || 'Unknown';
-            document.getElementById('emergencyCamera').textContent = 'Camera Detection';
-            document.getElementById('emergencyConfidence').textContent = alert.message.match(/\d+%/)?.[0] || 'High';
-            document.getElementById('emergencyModal').classList.add('active');
-        }
+function showEmergency(alert) {
+    emergencyActive = true;
 
-        function closeEmergency() {
-            emergencyActive = false;
-            document.getElementById('emergencyModal').classList.remove('active');
-        }
+    const location = alert.message.split('at ')[1]?.split(' -')[0] || 'Unknown';
+    const confidence = alert.message.match(/\d+%/)?.[0] || 'High';
+
+    // Keep ids and add parsed fields
+    currentAlert = {
+        id: alert.id,
+        detection_id: alert.detection_id,
+        alert_level: alert.alert_level,
+        status: alert.status,
+        message: alert.message,
+        location,
+        camera: 'Camera Detection',
+        confidence
+    };
+
+    document.getElementById('emergencyLocation').textContent = location;
+    document.getElementById('emergencyCamera').textContent = 'Camera Detection';
+    document.getElementById('emergencyConfidence').textContent = confidence;
+    document.getElementById('emergencyModal').classList.add('active');
+}
+
+
+function closeEmergency() {
+    document.getElementById('emergencyModal').classList.remove('active');
+}
 
         // ========================================
         // NOTIFICATION MODAL
         // ========================================
-        let currentAlert = null;
+function showNotificationSelection() {
+    // Update fields but keep id and detection_id
+currentAlert = {
+    ...currentAlert,
+    location: document.getElementById('emergencyLocation').textContent,
+    camera: document.getElementById('emergencyCamera').textContent,
+    confidence: document.getElementById('emergencyConfidence').textContent
+};
 
-        function showNotificationSelection() {
-            currentAlert = {
-                location: document.getElementById('emergencyLocation').textContent,
-                camera: document.getElementById('emergencyCamera').textContent,
-                confidence: document.getElementById('emergencyConfidence').textContent
-            };
+    closeEmergency();
 
-            closeEmergency();
-            
-            const container = document.getElementById('firefighterCheckboxes');
-            container.innerHTML = '';
-            
-            const firefighters = dashboardData?.firefighters || [];
-            firefighters.forEach((ff) => {
-                const label = document.createElement('label');
-                label.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px; cursor: pointer;';
-                label.innerHTML = `
-                    <input type="checkbox" class="ff-notify-checkbox" data-id="${ff.id}" style="width: 18px; height: 18px;">
-                    <div>
-                        <strong>${ff.name}</strong><br>
-                        <small style="color: #aaa;">📱 ${ff.phone} | Station ${ff.station}</small>
-                    </div>
-                `;
-                container.appendChild(label);
-            });
+    const container = document.getElementById('firefighterCheckboxes');
+    container.innerHTML = '';
 
-            document.getElementById('notificationModal').classList.add('active');
-        }
+    const firefighters = dashboardData?.firefighters || [];
+    firefighters.forEach((ff) => {
+        const label = document.createElement('label');
+        label.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px; cursor: pointer;';
+        label.innerHTML = `
+            <input type="checkbox" class="ff-notify-checkbox" data-id="${ff.id}" style="width: 18px; height: 18px;">
+            <div>
+                <strong>${ff.name}</strong><br>
+                <small style="color: #aaa;">📱 ${ff.phone} | Station ${ff.station}</small>
+            </div>
+        `;
+        container.appendChild(label);
+    });
+
+    document.getElementById('notificationModal').classList.add('active');
+}
+
+
+        async function notifyNearestStations() {
+    if (!dashboardData || !currentAlert) {
+        alert('No alert data available');
+        return;
+    }
+
+    const detections = dashboardData.detections || [];
+    const stations = dashboardData.stations || [];
+    const firefighters = dashboardData.firefighters || [];
+
+    const detection = detections.find(d => d.id === currentAlert.detection_id);
+    if (!detection) {
+        alert('Cannot find detection for this alert');
+        return;
+    }
+
+    if (detection.latitude == null || detection.longitude == null) {
+        alert('Detection has no coordinates, cannot find nearest stations');
+        return;
+    }
+
+    const originLat = parseFloat(detection.latitude);
+    const originLng = parseFloat(detection.longitude);
+
+    function toRad(deg) {
+        return deg * Math.PI / 180;
+    }
+
+    function distanceKm(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    const stationsWithDistance = stations
+        .filter(s => s.latitude != null && s.longitude != null)
+        .map(s => ({
+            ...s,
+            distance: distanceKm(
+                originLat,
+                originLng,
+                parseFloat(s.latitude),
+                parseFloat(s.longitude)
+            )
+        }))
+        .sort((a, b) => a.distance - b.distance);
+
+    if (stationsWithDistance.length === 0) {
+        alert('No stations with coordinates configured');
+        return;
+    }
+
+    const targets = stationsWithDistance.slice(0, 2);
+    const targetIds = targets.map(s => s.id);
+
+    const firefightersToNotify = firefighters.filter(ff =>
+        targetIds.includes(ff.station)
+    );
+
+    // Show a summary message instead of checkboxes
+    let msg = 'Sending signals to fire stations:\n\n';
+    targets.forEach(s => {
+        const count = firefightersToNotify.filter(ff => ff.station === s.id).length;
+        msg += `• ${s.name} (${count} firefighters)\n`;
+    });
+
+    msg += '\nTexting:\n';
+    firefightersToNotify.forEach(ff => {
+        msg += `  - ${ff.name} (${ff.phone})\n`;
+    });
+
+    alert(msg);
+
+    // Tell backend to create station alerts in firefighter_alerts
+try {
+    await fetch('?station_alert=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            alert_id: currentAlert.id,
+            detection_id: detection.id,
+            alert_type: detection.detection_type,  // 'fire' or 'smoke'
+            location: detection.location,
+            area: detection.location,             // or a more detailed area field if you have one
+            confidence: detection.confidence,
+            stations: targetIds                   // [stationId1, stationId2]
+        })
+    });
+} catch (e) {
+    console.error('Failed to create firefighter alerts', e);
+}
+
+
+    // Mark the alert as acknowledged so it stops reappearing
+    try {
+        await fetch('?update_alert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: currentAlert.id,
+                status: 'acknowledged'
+            })
+        });
+    } catch (e) {
+        console.error('Failed to update alert status', e);
+    }
+
+    emergencyActive = false;
+    closeEmergency();
+    fetchData();  // refresh so this alert disappears from "active"
+}
+
 
         function toggleNotifyAll() {
             const notifyAll = document.getElementById('notifyAll').checked;

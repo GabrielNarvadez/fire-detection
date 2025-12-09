@@ -24,7 +24,7 @@
             <p><strong>Camera:</strong> <span id="emergencyCamera"></span></p>
             <p><strong>Confidence:</strong> <span id="emergencyConfidence"></span></p>
             <div class="modal-actions">
-                <button class="btn btn-primary" style="background: #fff; color: #e94560;" onclick="showNotificationSelection()">SELECT FIREFIGHTERS TO NOTIFY</button>
+                <button class="btn btn-primary" style="background: #fff; color: #e94560;" onclick="notifyNearestStations()">SELECT FIREFIGHTERS TO NOTIFY</button>
                 <button class="btn btn-secondary" style="border-color: #fff;" onclick="closeEmergency()">ACKNOWLEDGE</button>
             </div>
         </div>
