@@ -199,6 +199,104 @@ async function fetchStationData() {
     }
 }
 
+// ============================================
+// WEATHER API for Dulag, Leyte
+// ============================================
+async function fetchWeather() {
+    try {
+        // Dulag, Leyte coordinates
+        const lat = 11.0550;
+        const lon = 125.0331;
+        
+        // Using OpenWeatherMap API (free tier)
+        // You can get your own API key at: https://openweathermap.org/api
+        const apiKey = 'd8b8b8d8b8b8b8b8b8b8b8b8b8b8b8b8'; // Replace with real API key
+        
+        const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.main && data.weather) {
+            // Update temperature
+            document.getElementById('weatherTemp').textContent = `${Math.round(data.main.temp)}°C`;
+            
+            // Update humidity
+            document.getElementById('weatherHumidity').textContent = `${data.main.humidity}%`;
+            
+            // Update weather description
+            const desc = data.weather[0].main;
+            document.getElementById('weatherDesc').textContent = desc;
+            
+            // Update weather icon based on condition
+            const iconMap = {
+                'Clear': '☀️',
+                'Clouds': '☁️',
+                'Rain': '🌧️',
+                'Drizzle': '🌦️',
+                'Thunderstorm': '⛈️',
+                'Snow': '❄️',
+                'Mist': '🌫️',
+                'Fog': '🌫️',
+                'Haze': '🌫️'
+            };
+            document.getElementById('weatherIcon').textContent = iconMap[desc] || '🌤️';
+            
+            // Update wind speed (convert m/s to km/h)
+            const windKmh = (data.wind.speed * 3.6).toFixed(1);
+            document.getElementById('weatherWind').textContent = `${windKmh} km/h`;
+            
+        } else {
+            console.error('Weather data format unexpected:', data);
+        }
+    } catch (error) {
+        console.error('Error fetching weather:', error);
+        // Fallback to default values if API fails
+        document.getElementById('weatherTemp').textContent = '--°C';
+        document.getElementById('weatherHumidity').textContent = '--%';
+        document.getElementById('weatherDesc').textContent = 'Unavailable';
+        document.getElementById('weatherWind').textContent = '-- km/h';
+    }
+}
+
+// Alternative: Use wttr.in (no API key needed)
+async function fetchWeatherWttr() {
+    try {
+        const response = await fetch('https://wttr.in/Dulag,Leyte?format=j1');
+        const data = await response.json();
+        
+        const current = data.current_condition[0];
+        
+        document.getElementById('weatherTemp').textContent = `${current.temp_C}°C`;
+        document.getElementById('weatherHumidity').textContent = `${current.humidity}%`;
+        document.getElementById('weatherDesc').textContent = current.weatherDesc[0].value;
+        document.getElementById('weatherWind').textContent = `${current.windspeedKmph} km/h`;
+        
+        // Update icon based on weather code
+        const code = parseInt(current.weatherCode);
+        let icon = '🌤️';
+        if (code === 113) icon = '☀️';  // Clear
+        else if (code >= 116 && code <= 119) icon = '☁️';  // Cloudy
+        else if (code >= 200 && code <= 232) icon = '⛈️';  // Thunderstorm
+        else if (code >= 296 && code <= 399) icon = '🌧️';  // Rain
+        
+        document.getElementById('weatherIcon').textContent = icon;
+        
+    } catch (error) {
+        console.error('Error fetching weather from wttr.in:', error);
+    }
+}
+
 // Initial load + polling
 fetchStationData();
 setInterval(fetchStationData, 3000);
+
+// Fetch weather on load and every 10 minutes
+fetchWeatherWttr();  // Using wttr.in (no API key needed)
+setInterval(fetchWeatherWttr, 600000);  // Update every 10 minutes
+
+// Note: If you want to use OpenWeatherMap instead:
+// 1. Get API key from https://openweathermap.org/api
+// 2. Replace the apiKey in fetchWeather() function
+// 3. Use fetchWeather() instead of fetchWeatherWttr()
+// 4. Update the intervals accordingly
