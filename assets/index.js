@@ -372,46 +372,11 @@ async function sendAlertToAllFirefighters() {
         ? `${(currentAlert.confidence * 100).toFixed(1)}%` 
         : 'High';
 
-    const webhookPayload = {
-        alert_id: currentAlert.id,
-        detection_id: currentAlert.detection_id,
-        alert_type: detectionType,
-        confidence: confidence,
-        timestamp: new Date().toISOString(),
-        camera: {
-            name: cameraName,
-            address: cameraAddress,
-            latitude: detection?.latitude ?? 0,
-            longitude: detection?.longitude ?? 0
-        },
-        firefighters: firefighters.map(ff => ({
-            id: ff.id,
-            name: ff.name,
-            phone: ff.phone,
-            station: ff.station,
-            station_name: stations.find(s => s.id === ff.station)?.name || `Station ${ff.station}`
-        })),
-        message: `FIRE ALERT: ${detectionType.toUpperCase()} detected at ${cameraAddress}`
-    };
-
     try {
-        const webhookResponse = await fetch(
-            'https://n8n.flyhubdigital.com/webhook/21c58504-e970-43c5-ab1f-26f20355e7b4', 
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(webhookPayload)
-            }
-        );
-
-        if (!webhookResponse.ok) {
-            throw new Error('Webhook returned non-OK status');
-        }
-
-        // Create firefighter_alerts entries for all stations so firefighter dashboard picks them up
+        // PRIORITY 1: Send alert to firefighter dashboard immediately
         const stationIds = [...new Set(firefighters.map(ff => ff.station))]; // unique station IDs
         
-        await fetch('?station_alert', {
+        const stationAlertResponse = await fetch('?station_alert', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -425,18 +390,52 @@ async function sendAlertToAllFirefighters() {
             })
         });
 
-        // NOW mark the alert acknowledged AFTER successful webhook
+        if (!stationAlertResponse.ok) {
+            throw new Error('Failed to send alert to firefighter stations');
+        }
+
+        // Mark the alert acknowledged after firefighter dashboard receives it
         await fetch('?update_alert', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: currentAlert.id, status: 'acknowledged' })
         });
 
-        alert('Alert successfully sent to firefighters.');
+        // PRIORITY 2: Send webhook (non-blocking - runs in background)
+        const webhookPayload = {
+            alert_id: currentAlert.id,
+            detection_id: currentAlert.detection_id,
+            alert_type: detectionType,
+            confidence: confidence,
+            timestamp: new Date().toISOString(),
+            camera: {
+                name: cameraName,
+                address: cameraAddress,
+                latitude: detection?.latitude ?? 0,
+                longitude: detection?.longitude ?? 0
+            },
+            firefighters: firefighters.map(ff => ({
+                id: ff.id,
+                name: ff.name,
+                phone: ff.phone,
+                station: ff.station,
+                station_name: stations.find(s => s.id === ff.station)?.name || `Station ${ff.station}`
+            })),
+            message: `FIRE ALERT: ${detectionType.toUpperCase()} detected at ${cameraAddress}`
+        };
+
+        // Send webhook in background - don't wait for it
+        fetch('https://n8n.flyhubdigital.com/webhook/21c58504-e970-43c5-ab1f-26f20355e7b4', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(webhookPayload)
+        }).catch(e => console.warn('Webhook failed (non-critical):', e));
+
+        alert('🚒 Alert sent to firefighter stations!');
     }
     catch (e) {
-        console.error('Webhook error:', e);
-        alert('Error sending alert.');
+        console.error('Error sending alert:', e);
+        alert('Error sending alert to firefighter stations.');
     }
 
     closeEmergencyModal();
