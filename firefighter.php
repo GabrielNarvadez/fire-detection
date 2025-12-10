@@ -1,4 +1,25 @@
 <?php
+session_start();
+
+// Check if user is logged in as firefighter
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    header('Location: login.php');
+    exit;
+}
+
+// Optional: Restrict to firefighter only (comment out if you want both types to access)
+if ($_SESSION['user_type'] !== 'firefighter') {
+    header('Location: index.php');
+    exit;
+}
+
+// Handle logout
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+
 require_once 'assets/functions.php';
 ?>
 <!DOCTYPE html>
@@ -15,7 +36,13 @@ require_once 'assets/functions.php';
             <div class="logo-icon">🚒</div>
             <h1>Firefighter Alert</h1>
         </div>
-        <div class="status-badge" id="statusBadge">● STANDBY</div>
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <div class="user-badge" style="color: #ffa502; font-size: 14px;">
+                👤 <?php echo htmlspecialchars($_SESSION['user_name']); ?>
+            </div>
+            <a href="?logout=1" class="logout-link" style="color: #e94560; text-decoration: none; font-weight: 600; font-size: 14px;">Logout</a>
+            <div class="status-badge" id="statusBadge">● STANDBY</div>
+        </div>
     </div>
 
     <div class="dashboard-grid">
@@ -118,7 +145,7 @@ require_once 'assets/functions.php';
                     <div class="alert-time" id="alertTime">⏱️ Received just now</div>
                     <div class="alert-actions">
                         <button class="btn btn-respond" onclick="respondToAlert()">🚒 Responding</button>
-                        <button class="btn btn-acknowledge" onclick="acknowledgeAlert()">✓ Acknowledge</button>
+                        <button class="btn btn-acknowledge" onclick="acknowledgeAlert()">✔ Acknowledge</button>
                     </div>
                 </div>
             </div>
@@ -131,7 +158,7 @@ require_once 'assets/functions.php';
                 <div class="section-title">📋 Recent Alerts</div>
                 <div id="historyList">
                     <div class="empty-history">
-                        <div class="icon">📭</div>
+                        <div class="icon">🔭</div>
                         <p>No recent alerts</p>
                     </div>
                 </div>

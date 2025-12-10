@@ -57,7 +57,13 @@
             if (data.stats) {
                 document.getElementById('activeCameras').textContent = data.stats.active_cameras || 0;
                 document.getElementById('detectionsToday').textContent = data.stats.detections_today || 0;
-                document.getElementById('avgResponse').textContent = data.stats.avg_response_time || 3.2;
+                // After (fixed):
+if (data.stats.avg_response_time != null && data.stats.avg_response_time > 0) {
+    const minutes = data.stats.avg_response_time / 60;
+    document.getElementById('avgResponse').textContent = minutes.toFixed(1);
+} else {
+    document.getElementById('avgResponse').textContent = '-';
+}
                 document.getElementById('personnelOnline').textContent = data.stats.personnel_online || 0;
                 
                 const changeEl = document.getElementById('detectionChange');

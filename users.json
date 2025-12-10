@@ -1,0 +1,18 @@
+[
+    {
+        "id": 1,
+        "fullname": "Admin User",
+        "email": "admin@fire.com",
+        "password": "$2y$10$6TEXTOdXe1xrVlb02gCZaui8\/ifWukPzu01IpTncnMmK78z1VICee",
+        "user_type": "personnel",
+        "created_at": "2025-12-10 08:52:08"
+    },
+    {
+        "id": 2,
+        "fullname": "Firefighter User",
+        "email": "firefighter@fire.com",
+        "password": "$2y$10$BEgQlYdjU.rtxEsFFt0DoehmQu2HJLYIyI2lABvxldBv60dxL0tce",
+        "user_type": "firefighter",
+        "created_at": "2025-12-10 08:52:08"
+    }
+]

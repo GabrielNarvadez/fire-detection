@@ -1,4 +1,27 @@
-<?php include 'assets/functions.php';?>
+<?php 
+session_start();
+
+// Check if user is logged in as personnel
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    header('Location: login.php');
+    exit;
+}
+
+// Optional: Restrict to personnel only (comment out if you want both types to access)
+if ($_SESSION['user_type'] !== 'personnel') {
+    header('Location: firefighter.php');
+    exit;
+}
+
+// Handle logout
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header('Location: login.php');
+    exit;
+}
+
+include 'assets/functions.php';
+?>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -132,7 +155,13 @@
                 <div class="status-badge status-operational" id="systemStatus">SYSTEM OPERATIONAL</div>
             </div>
         </div>
-        <div class="datetime" id="datetime"></div>
+        <div style="display: flex; align-items: center; gap: 20px;">
+            <div class="user-info" style="color: #888; font-size: 14px;">
+                👤 <?php echo htmlspecialchars($_SESSION['user_name']); ?>
+                <a href="?logout=1" style="color: #e94560; margin-left: 15px; text-decoration: none; font-weight: 600;">Logout</a>
+            </div>
+            <div class="datetime" id="datetime"></div>
+        </div>
     </div>
 
     <!-- Main Dashboard -->
