@@ -286,8 +286,14 @@ function showEmergency(alert) {
 }
 
 
+function closeEmergencyModal() {
+    // Just close the modal without updating status (for use after sendAlert)
+    emergencyActive = false;
+    document.getElementById('emergencyModal').classList.remove('active');
+}
+
 async function closeEmergency() {
-    // Update the alert status to 'acknowledged' in the database so it doesn't keep showing
+    // Update the alert status to 'acknowledged' and close (for ACKNOWLEDGE button)
     if (currentAlert && currentAlert.id) {
         try {
             await fetch('?update_alert', {
@@ -303,8 +309,7 @@ async function closeEmergency() {
         }
     }
     
-    emergencyActive = false;
-    document.getElementById('emergencyModal').classList.remove('active');
+    closeEmergencyModal();
     fetchData(); // Refresh to remove the acknowledged alert from the list
 }
 
@@ -343,7 +348,7 @@ currentAlert = {
 }
 
 
-        async function notifyNearestStations() {
+        async function sendAlertToAllFirefighters() {
     if (!dashboardData || !currentAlert) {
         alert('No alert data available');
         return;
@@ -353,94 +358,109 @@ currentAlert = {
     const stations = dashboardData.stations || [];
     const firefighters = dashboardData.firefighters || [];
 
+    if (firefighters.length === 0) {
+        alert('No firefighters registered in the system');
+        return;
+    }
+
     const detection = detections.find(d => d.id === currentAlert.detection_id);
-    if (!detection) {
-        alert('Cannot find detection for this alert');
-        return;
+    
+    // Get camera/detection location info
+    const cameraAddress = detection?.location || currentAlert.location || 'Unknown Location';
+    const cameraName = detection?.camera_name || currentAlert.camera || 'Unknown Camera';
+    const detectionType = detection?.detection_type || 'fire';
+    const confidence = currentAlert.confidence != null 
+        ? `${(currentAlert.confidence * 100).toFixed(1)}%` 
+        : 'High';
+    const latitude = detection?.latitude || null;
+    const longitude = detection?.longitude || null;
+
+    // Prepare webhook payload with all firefighters
+    const webhookPayload = {
+        alert_id: currentAlert.id,
+        detection_id: currentAlert.detection_id,
+        alert_type: detectionType,
+        confidence: confidence,
+        timestamp: new Date().toISOString(),
+        camera: {
+            name: cameraName,
+            address: cameraAddress,
+            latitude: latitude,
+            longitude: longitude
+        },
+        firefighters: firefighters.map(ff => ({
+            id: ff.id,
+            name: ff.name,
+            phone: ff.phone,
+            station: ff.station,
+            station_name: stations.find(s => s.id === ff.station)?.name || `Station ${ff.station}`
+        })),
+        message: `🔥 FIRE ALERT: ${detectionType.toUpperCase()} detected at ${cameraAddress}. Confidence: ${confidence}. Respond immediately!`
+    };
+
+    // Show sending indicator
+    const sendBtn = document.querySelector('#emergencyModal .btn-primary');
+    const originalText = sendBtn ? sendBtn.textContent : '';
+    if (sendBtn) {
+        sendBtn.textContent = '📡 SENDING ALERT...';
+        sendBtn.disabled = true;
     }
 
-    if (detection.latitude == null || detection.longitude == null) {
-        alert('Detection has no coordinates, cannot find nearest stations');
-        return;
+    try {
+        // Send webhook to n8n
+        const webhookUrl = 'https://n8n.flyhubdigital.com/webhook/21c58504-e970-43c5-ab1f-26f20355e7b4';
+        
+        const webhookResponse = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(webhookPayload)
+        });
+
+        if (!webhookResponse.ok) {
+            console.error('Webhook response not OK:', webhookResponse.status);
+        }
+
+        // Also create station alerts in local database
+        const stationIds = [...new Set(firefighters.map(ff => ff.station))];
+        await fetch('?station_alert=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                alert_id: currentAlert.id,
+                detection_id: detection?.id || currentAlert.detection_id,
+                alert_type: detectionType,
+                location: cameraAddress,
+                area: cameraAddress,
+                confidence: detection?.confidence || currentAlert.confidence,
+                stations: stationIds
+            })
+        });
+
+        // Show success message
+        let successMsg = `✅ ALERT SENT SUCCESSFULLY!\n\n`;
+        successMsg += `📍 Location: ${cameraAddress}\n`;
+        successMsg += `🎥 Camera: ${cameraName}\n`;
+        successMsg += `🔥 Type: ${detectionType.toUpperCase()}\n`;
+        successMsg += `📊 Confidence: ${confidence}\n\n`;
+        successMsg += `📱 SMS sent to ${firefighters.length} firefighter(s):\n`;
+        firefighters.forEach(ff => {
+            successMsg += `   • ${ff.name} (${ff.phone})\n`;
+        });
+
+        alert(successMsg);
+
+    } catch (e) {
+        console.error('Failed to send alert:', e);
+        alert('⚠️ Error sending alert. Please try again or contact firefighters manually.');
     }
 
-    const originLat = parseFloat(detection.latitude);
-    const originLng = parseFloat(detection.longitude);
-
-    function toRad(deg) {
-        return deg * Math.PI / 180;
+    // Restore button
+    if (sendBtn) {
+        sendBtn.textContent = originalText;
+        sendBtn.disabled = false;
     }
-
-    function distanceKm(lat1, lon1, lat2, lon2) {
-        const R = 6371;
-        const dLat = toRad(lat2 - lat1);
-        const dLon = toRad(lon2 - lon1);
-        const a =
-            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return R * c;
-    }
-
-    const stationsWithDistance = stations
-        .filter(s => s.latitude != null && s.longitude != null)
-        .map(s => ({
-            ...s,
-            distance: distanceKm(
-                originLat,
-                originLng,
-                parseFloat(s.latitude),
-                parseFloat(s.longitude)
-            )
-        }))
-        .sort((a, b) => a.distance - b.distance);
-
-    if (stationsWithDistance.length === 0) {
-        alert('No stations with coordinates configured');
-        return;
-    }
-
-    const targets = stationsWithDistance.slice(0, 2);
-    const targetIds = targets.map(s => s.id);
-
-    const firefightersToNotify = firefighters.filter(ff =>
-        targetIds.includes(ff.station)
-    );
-
-    // Show a summary message instead of checkboxes
-    let msg = 'Sending signals to fire stations:\n\n';
-    targets.forEach(s => {
-        const count = firefightersToNotify.filter(ff => ff.station === s.id).length;
-        msg += `• ${s.name} (${count} firefighters)\n`;
-    });
-
-    msg += '\nTexting:\n';
-    firefightersToNotify.forEach(ff => {
-        msg += `  - ${ff.name} (${ff.phone})\n`;
-    });
-
-    alert(msg);
-
-    // Tell backend to create station alerts in firefighter_alerts
-try {
-    await fetch('?station_alert=1', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            alert_id: currentAlert.id,
-            detection_id: detection.id,
-            alert_type: detection.detection_type,  // 'fire' or 'smoke'
-            location: detection.location,
-            area: detection.location,             // or a more detailed area field if you have one
-            confidence: detection.confidence,
-            stations: targetIds                   // [stationId1, stationId2]
-        })
-    });
-} catch (e) {
-    console.error('Failed to create firefighter alerts', e);
-}
-
 
     // Mark the alert as acknowledged so it stops reappearing
     try {
@@ -457,9 +477,14 @@ try {
     }
 
     emergencyActive = false;
-    closeEmergency();
-    fetchData();  // refresh so this alert disappears from "active"
+    closeEmergencyModal();
+    fetchData();
 }
+
+    // Keep old function name as alias for backward compatibility
+    async function notifyNearestStations() {
+        return sendAlertToAllFirefighters();
+    }
 
 
         function toggleNotifyAll() {
