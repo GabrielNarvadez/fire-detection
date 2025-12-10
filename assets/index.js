@@ -408,6 +408,23 @@ async function sendAlertToAllFirefighters() {
             throw new Error('Webhook returned non-OK status');
         }
 
+        // Create firefighter_alerts entries for all stations so firefighter dashboard picks them up
+        const stationIds = [...new Set(firefighters.map(ff => ff.station))]; // unique station IDs
+        
+        await fetch('?station_alert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                alert_id: currentAlert.id,
+                detection_id: currentAlert.detection_id,
+                alert_type: detectionType,
+                location: cameraAddress,
+                area: cameraName,
+                confidence: detection?.confidence ?? 0,
+                stations: stationIds
+            })
+        });
+
         // NOW mark the alert acknowledged AFTER successful webhook
         await fetch('?update_alert', {
             method: 'POST',
