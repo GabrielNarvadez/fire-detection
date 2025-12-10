@@ -348,15 +348,15 @@ currentAlert = {
 }
 
 
-        async function sendAlertToAllFirefighters() {
+async function sendAlertToAllFirefighters() {
     if (!dashboardData || !currentAlert) {
         alert('No alert data available');
         return;
     }
 
     const detections = dashboardData.detections || [];
-    const stations = dashboardData.stations || [];
     const firefighters = dashboardData.firefighters || [];
+    const stations = dashboardData.stations || [];
 
     if (firefighters.length === 0) {
         alert('No firefighters registered in the system');
@@ -364,18 +364,14 @@ currentAlert = {
     }
 
     const detection = detections.find(d => d.id === currentAlert.detection_id);
-    
-    // Get camera/detection location info
-    const cameraAddress = detection?.location || currentAlert.location || 'Unknown Location';
-    const cameraName = detection?.camera_name || currentAlert.camera || 'Unknown Camera';
+
+    const cameraAddress = detection?.location || currentAlert.location;
+    const cameraName = detection?.camera_name || currentAlert.camera;
     const detectionType = detection?.detection_type || 'fire';
     const confidence = currentAlert.confidence != null 
         ? `${(currentAlert.confidence * 100).toFixed(1)}%` 
         : 'High';
-    const latitude = detection?.latitude || null;
-    const longitude = detection?.longitude || null;
 
-    // Prepare webhook payload with all firefighters
     const webhookPayload = {
         alert_id: currentAlert.id,
         detection_id: currentAlert.detection_id,
@@ -385,8 +381,8 @@ currentAlert = {
         camera: {
             name: cameraName,
             address: cameraAddress,
-            latitude: latitude,
-            longitude: longitude
+            latitude: detection?.latitude ?? 0,
+            longitude: detection?.longitude ?? 0
         },
         firefighters: firefighters.map(ff => ({
             id: ff.id,
@@ -395,91 +391,41 @@ currentAlert = {
             station: ff.station,
             station_name: stations.find(s => s.id === ff.station)?.name || `Station ${ff.station}`
         })),
-        message: `🔥 FIRE ALERT: ${detectionType.toUpperCase()} detected at ${cameraAddress}. Confidence: ${confidence}. Respond immediately!`
+        message: `FIRE ALERT: ${detectionType.toUpperCase()} detected at ${cameraAddress}`
     };
 
-    // Show sending indicator
-    const sendBtn = document.querySelector('#emergencyModal .btn-primary');
-    const originalText = sendBtn ? sendBtn.textContent : '';
-    if (sendBtn) {
-        sendBtn.textContent = '📡 SENDING ALERT...';
-        sendBtn.disabled = true;
-    }
-
     try {
-        // Send webhook to n8n
-        const webhookUrl = 'https://n8n.flyhubdigital.com/webhook/21c58504-e970-43c5-ab1f-26f20355e7b4';
-        
-        const webhookResponse = await fetch(webhookUrl, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(webhookPayload)
-        });
+        const webhookResponse = await fetch(
+            'https://n8n.flyhubdigital.com/webhook/21c58504-e970-43c5-ab1f-26f20355e7b4', 
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(webhookPayload)
+            }
+        );
 
         if (!webhookResponse.ok) {
-            console.error('Webhook response not OK:', webhookResponse.status);
+            throw new Error('Webhook returned non-OK status');
         }
 
-        // Also create station alerts in local database
-        const stationIds = [...new Set(firefighters.map(ff => ff.station))];
-        await fetch('?station_alert=1', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                alert_id: currentAlert.id,
-                detection_id: detection?.id || currentAlert.detection_id,
-                alert_type: detectionType,
-                location: cameraAddress,
-                area: cameraAddress,
-                confidence: detection?.confidence || currentAlert.confidence,
-                stations: stationIds
-            })
-        });
-
-        // Show success message
-        let successMsg = `✅ ALERT SENT SUCCESSFULLY!\n\n`;
-        successMsg += `📍 Location: ${cameraAddress}\n`;
-        successMsg += `🎥 Camera: ${cameraName}\n`;
-        successMsg += `🔥 Type: ${detectionType.toUpperCase()}\n`;
-        successMsg += `📊 Confidence: ${confidence}\n\n`;
-        successMsg += `📱 SMS sent to ${firefighters.length} firefighter(s):\n`;
-        firefighters.forEach(ff => {
-            successMsg += `   • ${ff.name} (${ff.phone})\n`;
-        });
-
-        alert(successMsg);
-
-    } catch (e) {
-        console.error('Failed to send alert:', e);
-        alert('⚠️ Error sending alert. Please try again or contact firefighters manually.');
-    }
-
-    // Restore button
-    if (sendBtn) {
-        sendBtn.textContent = originalText;
-        sendBtn.disabled = false;
-    }
-
-    // Mark the alert as acknowledged so it stops reappearing
-    try {
+        // NOW mark the alert acknowledged AFTER successful webhook
         await fetch('?update_alert', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                id: currentAlert.id,
-                status: 'acknowledged'
-            })
+            body: JSON.stringify({ id: currentAlert.id, status: 'acknowledged' })
         });
-    } catch (e) {
-        console.error('Failed to update alert status', e);
+
+        alert('Alert successfully sent to firefighters.');
+    }
+    catch (e) {
+        console.error('Webhook error:', e);
+        alert('Error sending alert.');
     }
 
-    emergencyActive = false;
     closeEmergencyModal();
     fetchData();
 }
+
 
     // Keep old function name as alias for backward compatibility
     async function notifyNearestStations() {
