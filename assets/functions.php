@@ -237,8 +237,8 @@ function insertDefaultData($db) {
     if ($result == 0) {
         $db->exec("
             INSERT INTO cameras (id, name, type, location, latitude, longitude, status, temperature, frame_path) VALUES
-            (1, 'Camera 1 - Visual ML', 'visual', 'Building A - Warehouse', 14.6005, 120.9850, 'offline', 22.0, 'camera_frames/camera1_live.jpg'),
-            (2, 'Camera 2 - Thermal', 'thermal', 'Building A - Warehouse', 14.6010, 120.9855, 'offline', 22.5, 'camera_frames/camera2_live.jpg')
+            (1, 'Camera 1 - Visual ML', 'visual', 'EVSU Campus', 14.6005, 120.9850, 'offline', 22.0, 'camera_frames/camera1_live.jpg'),
+            (2, 'Camera 2 - Thermal', 'thermal', 'EVSU Campus', 14.6010, 120.9855, 'offline', 22.5, 'camera_frames/camera2_live.jpg')
         ");
     }
     
@@ -689,9 +689,9 @@ if (isset($_GET['api'])) {
         $detections[] = $row;
     }
     
-    // Get alerts
+    // Get alerts (only active ones - fixes bug where old dismissed alerts kept showing)
     $alerts = [];
-    $result = $db->query("SELECT * FROM alerts ORDER BY timestamp DESC LIMIT 20");
+    $result = $db->query("SELECT * FROM alerts WHERE status = 'active' ORDER BY timestamp DESC LIMIT 20");
     while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
         $alerts[] = $row;
     }

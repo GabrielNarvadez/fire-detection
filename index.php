@@ -259,7 +259,7 @@ include 'assets/functions.php';
                         No camera feed
                     </div>
                 </div>
-                <div style="font-size: 12px; color: #888;">Building A - Warehouse</div>
+                <div style="font-size: 12px; color: #888;">EVSU Campus</div>
             </div>
 
             <div class="panel camera-panel">
@@ -275,7 +275,7 @@ include 'assets/functions.php';
                         No camera feed
                     </div>
                 </div>
-                <div style="font-size: 12px; color: #888;">Building A - Warehouse</div>
+                <div style="font-size: 12px; color: #888;">EVSU Campus</div>
             </div>
         </div>
 

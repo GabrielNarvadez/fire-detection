@@ -1,5 +1,4 @@
-
-    let dashboardData = null;
+let dashboardData = null;
     let detectionChart = null;
     let map = null;
     let emergencyActive = false;
@@ -287,8 +286,26 @@ function showEmergency(alert) {
 }
 
 
-function closeEmergency() {
+async function closeEmergency() {
+    // Update the alert status to 'acknowledged' in the database so it doesn't keep showing
+    if (currentAlert && currentAlert.id) {
+        try {
+            await fetch('?update_alert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: currentAlert.id,
+                    status: 'acknowledged'
+                })
+            });
+        } catch (e) {
+            console.error('Failed to update alert status', e);
+        }
+    }
+    
+    emergencyActive = false;
     document.getElementById('emergencyModal').classList.remove('active');
+    fetchData(); // Refresh to remove the acknowledged alert from the list
 }
 
         // ========================================

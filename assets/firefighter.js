@@ -5,7 +5,7 @@ let currentAlert = null;
 
 // Optional demo alerts (you can keep for testing)
 const sampleAlerts = [
-    { type: 'fire',  location: 'Building A - Warehouse',      area: 'Industrial Zone',      confidence: '94%' },
+    { type: 'fire',  location: 'EVSU Campus',      area: 'Industrial Zone',      confidence: '94%' },
     { type: 'smoke', location: 'Floor 3 - Office Building',   area: 'Commercial District',  confidence: '87%' },
     { type: 'fire',  location: 'Residential Block 7',         area: 'Housing Complex',      confidence: '91%' }
 ];
