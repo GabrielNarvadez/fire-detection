@@ -176,7 +176,7 @@ if (data.stats.avg_response_time != null && data.stats.avg_response_time > 0) {
             log.innerHTML = '';
             
             activities.slice(0, 15).forEach(activity => {
-                const time = new Date(activity.timestamp);
+                const time = new Date(activity.timestamp + 'Z');
                 const div = document.createElement('div');
                 div.className = 'activity-item';
                 div.innerHTML = `
