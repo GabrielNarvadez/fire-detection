@@ -130,7 +130,7 @@ if (data.stats.avg_response_time != null && data.stats.avg_response_time > 0) {
 
             alertsList.innerHTML = '';
             alerts.slice(0, 5).forEach(alert => {
-                const alertTime = new Date(alert.timestamp);
+                const alertTime = new Date(alert.timestamp + 'Z');
                 const alertClass = alert.alert_level === 'critical' ? '' : 
                                   alert.alert_level === 'warning' ? 'alert-warning' : 'alert-info';
                 
