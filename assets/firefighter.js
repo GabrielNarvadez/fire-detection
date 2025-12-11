@@ -83,6 +83,10 @@ function showAlert(alert) {
 // Respond / acknowledge → backend
 async function respondToAlert() {
     if (!currentAlert) return;
+
+    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const localTime = new Date().toLocaleString();
+
     try {
         await fetch('firefighter.php?firefighter_station_update=1', {
             method: 'POST',
@@ -92,13 +96,21 @@ async function respondToAlert() {
                 response_type: 'responded'
             })
         });
-        alert('🚒 Response confirmed!\n\nDispatch notified.');
+
+        alert(
+            '🚒 Response confirmed!\n\n' +
+            `📍 Your timezone: ${userTimezone}\n` +
+            `🕒 Local time: ${localTime}`
+        );
+
     } catch (e) {
         console.error('Failed to send response', e);
     }
+
     clearAlert();
-    fetchStationData();  // refresh history and stats
+    fetchStationData();
 }
+
 
 async function acknowledgeAlert() {
     if (!currentAlert) return;
@@ -137,7 +149,17 @@ function updateHistoryFromServer(historyRows) {
     }
     list.innerHTML = historyRows.slice(0, 5).map(row => {
         const timeStr = row.responded_at || row.received_at;
-        const time = timeStr ? new Date(timeStr).toLocaleString() : '';
+        const time = timeStr
+    ? new Date(timeStr + 'Z').toLocaleString('en-US', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+      })
+    : '';
+
         const badge = row.status === 'responded' ? '✓ Responded' : '✓ Acknowledged';
         const icon = row.alert_type === 'smoke' ? '💨' : '🔥';
         return `

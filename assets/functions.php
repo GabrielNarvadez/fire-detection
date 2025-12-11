@@ -9,6 +9,8 @@ define('DATABASE_PATH', __DIR__ . '/../fire_detection.db');
 define('UPLOAD_DIR', 'uploads');
 define('ANNOTATED_DIR', 'annotated');
 
+date_default_timezone_set('Asia/Manila');
+
 // Create directories if they don't exist
 if (!is_dir(UPLOAD_DIR)) mkdir(UPLOAD_DIR, 0777, true);
 if (!is_dir(ANNOTATED_DIR)) mkdir(ANNOTATED_DIR, 0777, true);
